@@ -1,0 +1,24 @@
+
+* API Plans
+  - A MOP type?
+  - In plain C,  It'd be a whole lotta macros to do this, but I can
+    use C structure semantics for the frame-relative stuff.
+  - Can I use the old (re)define-macro, re-include trick?
+  - May require I #include <macro-parameter>.  Does that work?
+    -It does, but it's about the deep limit of what you can do, and it
+    ain't pretty.
+  - So define the same macros for different passes:
+    (1) Packing optimization - All the counters up front, the doubles
+    in the back
+    (2) Cache line counting - Take the total size of the frame data,
+    break it up into individual lines.  Make sure no store takes more
+    than 1 cache-line write.
+    - Can this work? Can I do a counting phase, then push the packing
+      into each line?  I can use unions with sz=(cache-line-size) to
+      ensure I have the right size.
+    - I guess this'd also define my frame-save routines as well?
+
+* Good idea for now?
+  - Fuck no, it's too much metaprogramming bs work.  Screw the cache
+    line stuff for now, make it basically work, then optimize later.
+    

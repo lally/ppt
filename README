@@ -1,2 +1,34 @@
-INITIAL SETUP
-and another!
+
+libmet
+------
+
+Lally Singh (lally@acm.org)
+BSD License
+
+PURPOSE
+-------
+libmet provides a minimal raw-data instrumentation library for
+capturing and storing measurements.  It works to minimize intrusion
+into system performance and is intended to work with very high rates
+of data.
+
+The measurements are (abstractly) represented in a table, with each
+column being a different measurement, and each row a synchronized
+'frame' of values.  For example, a single iteration of a main loop
+would be a single frame, containing one table cell per measurement.
+
+Using some macros, a data structure is filled with measurement data
+and that structure is written to disk.  
+
+INSTALLATION
+
+CONSTRAINTS
+-----------
+The primary frame data storage is a global variable, a structure
+optimized to minimize the number of cache lines read per measurement
+store and frame-save.
+
+HOW TO USE
+----------
+Define your frame measurement type, a variable of that type,
+and a frame-buffer for storing raw data.
