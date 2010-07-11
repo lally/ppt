@@ -33,4 +33,6 @@
 #define MET_CLEAR_TOTAL(glob, name) \
 	glob.val_##name = (MET_VALUE_TYPE) 0.0
 
+
+ 
 #endif /* INCLUDE_MET_H */
