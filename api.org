@@ -22,3 +22,8 @@
   - Fuck no, it's too much metaprogramming bs work.  Screw the cache
     line stuff for now, make it basically work, then optimize later.
     
+
+* LLVM Notes
+  LLVM has a packed structure type that we can generate decls for from
+  frames
+  

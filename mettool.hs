@@ -3,7 +3,7 @@ import Text.ParserCombinators.Parsec.Language
 import Text.ParserCombinators.Parsec.Prim (parse)
 import Text.ParserCombinators.Parsec.Token as P
 import List (sortBy)
-
+import LLVM.Core as LC
 --
 -- Parser types
 -- 
@@ -188,3 +188,10 @@ showAllocations text =
           mapSizes xs
       Left _ -> []
 
+
+--
+-- NOTE: ghci has a dynamic-loading bug that'll generally prevent it from
+-- loading LLVM correctly. BUT, ghc will compile and link it fine.
+--
+main :: IO ()
+main = do { LC.initializeNativeTarget }
