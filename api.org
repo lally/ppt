@@ -1,6 +1,7 @@
 
 * API Plans
   - A MOP type?
+** Plain C, $(cpp) metaprogramming
   - In plain C,  It'd be a whole lotta macros to do this, but I can
     use C structure semantics for the frame-relative stuff.
   - Can I use the old (re)define-macro, re-include trick?
@@ -18,7 +19,13 @@
       ensure I have the right size.
     - I guess this'd also define my frame-save routines as well?
 
-* Good idea for now?
-  - Fuck no, it's too much metaprogramming bs work.  Screw the cache
-    line stuff for now, make it basically work, then optimize later.
-    
+*** Good idea for now?
+    - Fuck no, it's too much metaprogramming bs work.  Screw the cache
+      line stuff for now, make it basically work, then optimize later.
+
+* Haskell Based
+  Yay!
+** Reading shared memory  
+   Convert the description into a 'Format'.
+   Write a Format -> ByteStream -> Get Frame
+   

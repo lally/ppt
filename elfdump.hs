@@ -11,8 +11,10 @@ import Control.Monad
 import Control.Applicative
 import qualified Data.Map as M
 
-elf :: IO Elf
-elf = do (liftM parseElf (B.readFile "/research/phd/libmet/test_target")) 
+{- A convenience function for ghci -}
+
+elf :: String -> IO Elf
+elf filename = do (liftM parseElf (B.readFile filename))
 
 {- Read String Tables -}
 strSections :: Elf -> [ElfSection]
@@ -104,7 +106,8 @@ loadElfSymbols elf =
 
                                        
 main = do 
-     elf <- liftM parseElf (B.readFile "/research/phd/libmet/test_target")
+--     elf <- liftM parseElf (B.readFile "/research/phd/libmet/test_target")
+     loadElfSymbols `liftM` (elf "/research/phd/libmet/test_target")
      
      return 0
      
