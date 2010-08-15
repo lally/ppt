@@ -29,3 +29,8 @@
    Convert the description into a 'Format'.
    Write a Format -> ByteStream -> Get Frame
    
+
+* LLVM Notes
+  LLVM has a packed structure type that we can generate decls for from
+  frames
+  
