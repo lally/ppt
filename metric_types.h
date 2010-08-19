@@ -6,8 +6,8 @@
 typedef unsigned long metrics_beta1_seqno_t;
 
 struct metrics_beta1_frame {
-	metrics_beta1_seqno seqno;
-	double              beta1;
+	metrics_beta1_seqno_t seqno;
+	double                beta1;
 };
 
 	
