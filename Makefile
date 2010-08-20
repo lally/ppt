@@ -3,7 +3,7 @@ CXXFLAGS=-I/usr/local/include -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -g -c $< -o $@
-all: test1 test2 libmet_listener test_llvm reader test_writer
+all: test1 test2 libmet_listener reader test_writer #test_llvm 
 
 
 libmet_listener: libmet_listener.o
