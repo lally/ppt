@@ -77,7 +77,7 @@ int main(int args, char **argv) {
 	setvbuf(dest, buf, _IOFBF, BUFFER_SIZE);
 	fprintf (dest, "beta1\n");
 
-	while (1) {
+	while (dest) {
 		unsigned int seqno;
 		unsigned int count;
 		count =0;
@@ -88,7 +88,9 @@ int main(int args, char **argv) {
 		// Only bother reading if there's anything new.
 		if (cur_min_seqno > last_seqno) {
 			do {
-				fprintf(dest, "%10.5f\n", cur->beta1);
+				if (dest) {
+					fprintf(dest, "%10.5f\n", cur->beta1);
+				}
 				seqno = cur++->seqno;
 				count++;
 				if (cur >= end) {
@@ -121,24 +123,25 @@ int main(int args, char **argv) {
 		// When we hit either boundary, we'll reset the delay to hit
 		// the 50%-fill point in the buffer.
 
-		bool alter = false;
-		if (count > (size - size/8)) {
-			// adjust the delay down
-			alter = true;
-		}
-		else if (count < (size/8)) {
-			alter = true;
+		bool recalc_delay = false;
+		
+		// Check if we've hit the high or low water marks.
+		if (count > (size - size/8) || count < (size/8)) {
+			// Recalculate the per-loop delay.
+			recalc_delay = true;
 		}
 
-		if (alter) {
-			// In 'delay' milliseconds, we read 'count' values.  Set the new
-			// delay to use this measured read-rate to sleep until half the
-			// buffer is full.  The 'rate' below is the appearance rate of
-			// new data, per millisecond.
+		if (recalc_delay) {
+			// In 'delay' milliseconds, we read 'count' values.  Use
+			// this as an estimator for the current write rate. Set
+			// the new delay to use this measured write-rate to sleep
+			// until half the buffer is full.  The 'rate' below is the
+			// appearance rate of new data, per millisecond.
 			double rate = (0.0 + count) /delay;
 			double new_delay = size * 0.5 / rate;
 			fprintf(stderr, 
-					"[rate=%6f val/ms, bufsz=%d] Shifting read rate from %d to %6.2f\n",
+					"[rate=%6f val/ms, bufsz=%d] Shifting read rate from "
+					"%d to %6.2f\n",
 					rate, size, delay, new_delay);
 			delay = (int) new_delay;
 		}
