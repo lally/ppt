@@ -34,3 +34,23 @@
   LLVM has a packed structure type that we can generate decls for from
   frames
   
+
+* IO Notes
+
+** Reader
+
+The problem is that I need a quick while () loop iteration statement
+that will stop in the case that the next value is less than the
+current.  The problem is on rollover.  Then I'm stuck on the element
+with max(seqno).
+
+I can make it behave better by waiting for a full buffer flush, but
+that's a waste.  The minimum value should be a /sentinel/.  There
+should only ever be one in the buffer at a time.  That's the rule.
+
+Let $b$ be the buffer size.
+
+I keep a counter $c$ for the number of values I saw since the last
+sentinel.  If I see one again, I check if $c!=b$, then I keep
+reading.  Else, stop there, and stop at the previous (max seqno) elem.
+

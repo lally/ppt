@@ -35,7 +35,7 @@ int main(int args, char **argv) {
 	int fd = shmget(mid, size, SHM_R);
 	void *pa = (void*)shmat(mid, 0, 0);
 	Table *table;
-    table = (Table*) pa;
+	table = (Table*) pa;
 	struct timespec tp;
 	tp.tv_sec = 0;
 	tp.tv_nsec = 500000000;
