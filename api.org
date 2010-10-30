@@ -54,3 +54,49 @@ I keep a counter $c$ for the number of values I saw since the last
 sentinel.  If I see one again, I check if $c!=b$, then I keep
 reading.  Else, stop there, and stop at the previous (max seqno) elem.
 
+
+* Tool name: 'pit': portable instrumentation tool
+  Modeled after git.
+** Nah, name it 'pt'.  "Performance Tool"
+  It'll have a .pt directory, with:
+
+** Measurements
+   .pit/measurements -- All your data, in raw form (.gz'd).
+   Use pit export <measurement> --format <fmt> for getting data
+   out
+   Or pit report <measurement> --format for a quick report.
+
+   Measurements should be able to auto-stamp themselves with
+   what they were taken of.  pit could look around for local .svn
+   or .git directories ? for auto-stamping the version of the
+   executable. It could look for symbols in the executables to
+   identify the version.
+
+   That's probably the easiest & most immediately-straight
+   forward. 
+
+** Generated Code
+   .pit/readers -- Generated code for reading all the frame
+   types.  This can include single and multi-threaded code.  How
+   to do that?
+
+   pit measure [desc] -p <pid> 
+   or
+   pit measure [desc] <fname> args
+
+*** A single-proc'd reader
+    We want a single thread & process to do all the
+    measurement for us.
+
+** Configuration Data
+   .pit/config -- What symbol to stamp the measurements with?
+   Defaut formats for reports and export?
+   Settings for different executables in a project
+
+** Some sort of version policy
+   We have to store what version of the software we measured.
+   This could be a (filename, last file write date, hash) tuple.
+   
+* Current (v0.1 - thesis) release
+  use .pt, save in .pt/readers.
+  Single threaded, single project.

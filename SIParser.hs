@@ -1,4 +1,4 @@
-module StaticInstrumentationParser where
+module SIParser where
 
 import Text.ParserCombinators.Parsec (sepBy, try, char, eof,
                                       many, ParseError,
@@ -61,28 +61,28 @@ emitCmd = do { try (char 'C' >> char '+' >> char '+'); return LangCpp }
           <|> do { string "C" >> return LangC }
           <?> "language name"
 
-ch c = do { Main.whiteSpace; x <- char c; Main.whiteSpace; return x }
+ch c = do { SIParser.whiteSpace; x <- char c; SIParser.whiteSpace; return x }
 
-emitType = do { Main.reserved "emit" 
-              ; Main.whiteSpace
+emitType = do { SIParser.reserved "emit" 
+              ; SIParser.whiteSpace
               ; lang <- emitCmd
-              ; Main.whiteSpace
+              ; SIParser.whiteSpace
               ; return lang
               }
 
-elementType = ( Main.reserved "double" >> return FDouble )
-              <|> ( Main.reserved "int" >> return FInt )
-              <|> ( Main.reserved "float" >> return FFloat )
+elementType = ( SIParser.reserved "double" >> return FDouble )
+              <|> ( SIParser.reserved "int" >> return FInt )
+              <|> ( SIParser.reserved "float" >> return FFloat )
               <?> "type name"
 
 element = do { typ <- elementType
-             ; name <- Main.identifier
-             ; Main.semi
+             ; name <- SIParser.identifier
+             ; SIParser.semi
              ; return (FrameElement typ name)
              }
 
-frameSpec = do { Main.reserved "frame"
-               ; name <- Main.identifier
+frameSpec = do { SIParser.reserved "frame"
+               ; name <- SIParser.identifier
                ; ch '{'
                ; elem <- many element
                ; ch '}'
@@ -106,7 +106,7 @@ commandFile =
                
 
 testParse :: Show a => Parser a -> String -> Either ParseError a
-testParse p input = parse (do { Main.whiteSpace
+testParse p input = parse (do { SIParser.whiteSpace
                             ; x <- p
                             ; eof
                             ; return x
