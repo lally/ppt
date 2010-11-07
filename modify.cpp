@@ -5,12 +5,23 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>
+#include <libelf.h>
+
+
+#ifndef SOLARIS
+#error "This is the Solaris agent.  Sorry"
+#endif
 
 int main(int args, char ** argv) {
 
-	if (args < 4) {
-		puts ("need: filename, offset(hex), new value(hex)");
+	
+	if (args < 2) {
+		puts ("need command");
 		return 1;
+	}
+
+	if (!strcmp(args[1], "attach")) {
+		attach(args, argv);
 	}
 
 	char * fname = argv[1];

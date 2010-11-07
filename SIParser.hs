@@ -7,7 +7,7 @@ import Text.ParserCombinators.Parsec.Language
 import Text.ParserCombinators.Parsec.Prim (parse)
 import Text.ParserCombinators.Parsec.Token as P
 import List (sortBy)
-import LLVM.Core as LC
+--import LLVM.Core as LC
 
 import StaticInstrumentation
     

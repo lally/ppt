@@ -14,6 +14,7 @@
 int mid;
 void *key_mem;
 
+int TEST_WRITER_VERSION=1024;
 /*
   http://en.wikipedia.org/wiki/Box-Muller_transform
 */
@@ -162,9 +163,11 @@ int main(int args, char **argv) {
 
 	    interval = whole_interval / 31.25;
 	    last_upd = now;
+#if 0
 	    printf("%d/%d: %d Hz, whole_interval=%fms, interval=%fms, "
 		   "seqno=%d\n",  mid, size,
 		   counter, whole_interval, interval, seqno);
+#endif
 	    counter = 0;
 	}
     }

@@ -59,7 +59,7 @@ reading.  Else, stop there, and stop at the previous (max seqno) elem.
   Modeled after git.
 ** Nah, name it 'pt'.  "Performance Tool"
   It'll have a .pt directory, with:
-
+  
 ** Measurements
    .pit/measurements -- All your data, in raw form (.gz'd).
    Use pit export <measurement> --format <fmt> for getting data
@@ -100,3 +100,23 @@ reading.  Else, stop there, and stop at the previous (max seqno) elem.
 * Current (v0.1 - thesis) release
   use .pt, save in .pt/readers.
   Single threaded, single project.
+
+** Platform differences
+   - LLVM generally isn't available on solaris.
+   - A degenerate loader program (perhaps a platform-specific helper
+     app) is needed for Solaris.
+
+   - Making 'pt' work over ssh could be useful in a variety of
+     situations
+     - Like when I'm simulating on a fracking cluster!!
+
+   - It'll be dead-small.  Just an ELF reader and process-specific
+     calls to embed the symbol in.
+     - DO IT IN C!! Use libelf.
+     - It'll do the insertion and never worry about ghc.
+     - GHC can just do the code generation & real computation work
+     - So damn portable it doesn't even run native!
+     - Later on it can become the local platform agent.
+       That's the name. pt-agent -symlink-> pt-solaris-agent
+       
+   

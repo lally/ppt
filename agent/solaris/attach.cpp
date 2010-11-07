@@ -1,8 +1,17 @@
+#include <gelf.h>
 #include <libelf.h>
 #include <unistd.h>
 #include <stdlib.h>
-#include <gelf.h>
 #include <string>
+#include <sstream>
+#include <iostream>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <utility>
+#include <algorithm>
+#include <map>
+#include <list>
 /*
   attach  -- attach instrumentation to a process
 
@@ -27,10 +36,12 @@ static bool s_trace;
 static int s_obsvd_pid; // the pid of the observed process
 static int s_logger_pdi; // the pid of the logging process
 
+int PT_SOLARIS_AGENT_VERSION = 1024; 
+
 std::ostream& TRACE() {
 	static std::stringstream ignored;
 	if (s_trace) {
-		return std::stderr;
+		return std::cerr;
 	}
 	else {
 		ignored.str().clear();
@@ -41,7 +52,7 @@ std::ostream& TRACE() {
 std::ostream& VERBOSE() {
 	static std::stringstream ignored;
 	if (s_verbose) {
-		return std::stderr;
+		return std::cerr;
 	}
 	else {
 		ignored.str().clear();
@@ -65,12 +76,22 @@ int attach (int argc, char **argv) {
 		case 's':  shm_sym_name.assign(optarg);	break;
 		case 'S':  ver_sym_name.assign(optarg); break;
 		case 'v':  ver_value = atoi(optarg);    break;
-		case 'i':  logger.assign(optarg);       break;
+		case 'i':  logger_name.assign(optarg);  break;
 		case '#':  shm_sz = atoi(optarg);       break;
 		case 'V':  s_verbose = true;            break;
 		case 'D':  s_trace = true;              break;
 		}
 	}
+	VERBOSE() << "This agent's pid is " << getpid() << std::endl;
+	VERBOSE() << "Observing pid " << s_obsvd_pid << std::endl;
+	VERBOSE() << "Shared memory symbol '" << shm_sym_name << "'" << std::endl;
+	VERBOSE() << "Version symbol '" << ver_sym_name << "'" << std::endl;
+	VERBOSE() << "Version Value " << ver_value << std::endl;
+	VERBOSE() << "Logger " << logger_name << std::endl;
+	VERBOSE() << "Shared memory " << shm_sz << " bytes" << std::endl;
+	VERBOSE() << "Verbose is " << (s_verbose ? "ON": "OFF") << std::endl;
+	VERBOSE() << "Tracing is " << (s_trace ? "ON": "OFF") << std::endl;
+	
 	if (elf_version(EV_CURRENT) == EV_NONE) {
 		printf("Failed libelf init: %s\n", elf_errmsg(-1));
 		return 1;
@@ -80,13 +101,13 @@ int attach (int argc, char **argv) {
 		puts("Need a valid pid to observe");
 		return 1;
 	}
-	if (logger.empty()) {
+	if (logger_name.empty()) {
 		puts ("Need a logger to call.");
 		return 1;
 	}
 
-	ELF * elfObserved;
-	const char observed_pathname[512];
+	Elf * elfObserved;
+	char observed_pathname[512];
 	sprintf(observed_pathname, "/proc/%d/object/a.out", s_obsvd_pid);
 	int obsvd_aout_fd;
 	if ((obsvd_aout_fd = open(observed_pathname, O_RDONLY, 0)) <= 0) {
@@ -101,27 +122,28 @@ int attach (int argc, char **argv) {
 		return 1;
 	}
 
-	ELF_Kind elfObservedKind = elf_kind(elfObservedKind);
+	Elf_Kind elfObservedKind = elf_kind(elfObserved);
 
-	static std::pair<ELF_Kind, const char*> s_elfkinds_init[] = {
-		{ ELF_K_AR, "ARchive" },
-		{ ELF_K_NONE, "None" },
-		{ ELF_K_ELF, "ELF Object" }
+	std::pair<Elf_Kind, const char*> s_elfkinds_init[] = {
+		std::make_pair( ELF_K_AR, "ARchive" ),
+		std::make_pair( ELF_K_NONE, "None" ),
+		std::make_pair( ELF_K_ELF, "ELF Object")
 	};
 
-	static std::map<ELF_Kind, const char *> s_elfkinds(s_elfkinds_init,
-													   s_elfkinds_init + 3);
+	std::map<Elf_Kind, const char *> s_elfkinds(s_elfkinds_init,
+												s_elfkinds_init + 3);
+	/* most of this taken out of the gelf(3ELF) manpage */
+	Elf_Scn *scn = NULL;
+	GElf_Shdr shdr;
+	Elf_Data  *data;
+	int cur_value = -1;
+
 	if (elfObservedKind != ELF_K_ELF) {
 		printf("Wrong type of object: %s\n", s_elfkinds[elfObservedKind]);
 		goto fail;
 	}
 
-	/* most of this taken out of the gelf(3ELF) manpage */
-	Elf_Scn *scn = NULL;
-	GElf_Shdr shd;
-	Elf_Data  *data;
-
-	while ((scn = elf_nextscn(elf, scn)) != NULL) {
+	while ((scn = elf_nextscn(elfObserved, scn)) != NULL) {
 		gelf_getshdr(scn, &shdr);
 		if (shdr.sh_type == SHT_SYMTAB) {
 			break;
@@ -134,11 +156,12 @@ int attach (int argc, char **argv) {
 	}
 	
 	data = elf_getdata(scn, NULL);
-	count = shdr.sh_size / shdr.sh_entsize;
+	int count = shdr.sh_size / shdr.sh_entsize;
 	for (int i=0; i<count; ++i) {
 		GElf_Sym sym;
 		gelf_getsym(data, i, &sym);
 		char *symname = elf_strptr(elfObserved, shdr.sh_link, sym.st_name);
+		TRACE() << "Found symbol " << symname << std::endl;
 		if (!strcmp(symname, ver_sym_name.c_str())) {
 			sym_version = sym;
 		}
@@ -157,17 +180,17 @@ int attach (int argc, char **argv) {
 	int fd_as;
 	char as_path[512];
 	sprintf(as_path, "/proc/%d/as", s_obsvd_pid);
-	if ((fd_as = open(as_path, O_RDWR, 0)) <= 0) {
-		perror(fd_as);
+	TRACE() << "Opening up address space for pid " << s_obsvd_pid << std::endl;
+	if ((fd_as = open(as_path, O_RDWR, 0)) < 0) {
+		perror(as_path);
 		goto fail;
 	}
 
 	
 	// first, read the version symbol
-	int cur_value = -1;
-	if (read(fd_as, &cur_value, sizeof(int), (off_t) sym_version.st_value) != sizeof(int)) {
+	if (read(fd_as, &cur_value, sizeof(int)) != sizeof(int)) {
+		perror(as_path);
 		goto fail_postfd;
-		perror("read");
 	}
 
 	if (cur_value != ver_value) {
@@ -176,11 +199,13 @@ int attach (int argc, char **argv) {
 		goto fail_postfd;
 	}
 
+	VERBOSE() << "Version check OK" << std::endl;
+
 	//
 	// OK.  Created the shared memory segment, call up the observer,
 	// and inject the handle into the observee.
 	//
-
+	
 	
 	
 	// if we get here, there was no failure, so clean up and return 0.
@@ -189,9 +214,9 @@ int attach (int argc, char **argv) {
 	retcode = 0;
 	
  fail_postfd:
-	close(fd_as)
+	close(fd_as);
  fail:	
-	elf_end(elfObservedKind);
+	elf_end(elfObserved);
 	close(obsvd_aout_fd);
 	return retcode;
 }
