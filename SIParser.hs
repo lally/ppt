@@ -200,5 +200,5 @@ showAllocations text =
 -- NOTE: ghci has a dynamic-loading bug that'll generally prevent it from
 -- loading LLVM correctly. BUT, ghc will compile and link it fine.
 --
-main :: IO ()
-main = do { LC.initializeNativeTarget }
+--main :: IO ()
+--main = do { LC.initializeNativeTarget }
