@@ -131,7 +131,7 @@ int attach (int argc, char **argv) {
 	};
 
 	std::map<Elf_Kind, const char *> s_elfkinds(s_elfkinds_init,
-												s_elfkinds_init + 3);
+						    s_elfkinds_init + 3);
 	/* most of this taken out of the gelf(3ELF) manpage */
 	Elf_Scn *scn = NULL;
 	GElf_Shdr shdr;

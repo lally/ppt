@@ -98,15 +98,15 @@ reading.  Else, stop there, and stop at the previous (max seqno) elem.
    This could be a (filename, last file write date, hash) tuple.
    
 * Current (v0.1 - thesis) release
-  use .pt, save in .pt/readers.
+  use .ppt, save in .ppt/readers.
   Single threaded, single project.
 
 ** Platform differences
-   - LLVM generally isn't available on solaris.
+   - LLVM generally isn't available on solaris for ghc.
    - A degenerate loader program (perhaps a platform-specific helper
      app) is needed for Solaris.
 
-   - Making 'pt' work over ssh could be useful in a variety of
+   - Making 'ppt' work over ssh could be useful in a variety of
      situations
      - Like when I'm simulating on a fracking cluster!!
 
@@ -117,6 +117,6 @@ reading.  Else, stop there, and stop at the previous (max seqno) elem.
      - GHC can just do the code generation & real computation work
      - So damn portable it doesn't even run native!
      - Later on it can become the local platform agent.
-       That's the name. pt-agent -symlink-> pt-solaris-agent
+       That's the name. ppt-agent -symlink-> ppt-solaris-agent
        
    

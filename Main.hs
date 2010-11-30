@@ -3,7 +3,8 @@ module Main where
 import SIParser as Parse
 import StaticInstrumentation as Inst
 import Storage as S
-import Generate
+import Generate as Gen
+import Listener as L
 import System (getArgs)   
 --import LLVM.Core as LC    
 {- Driver program for pt
@@ -29,7 +30,8 @@ runCommand args cfg = do
       otherwise -> showHelp
   
 main = do
-  -- Look at the command first.
-  config <- S.loadConfig
+  -- TODO: Look at the command first.
   args <- getArgs
+  config <- S.loadConfig
+  L.initialize
   runCommand args config
