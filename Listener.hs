@@ -1,6 +1,8 @@
 module Listener where
 import StaticInstrumentation
 import LLVM.Core
+import Data.TypeLevel.Num.Aliases
+
 import Data.Word
 --
 -- A wrapper around LLVM initialization, so that we don't have
@@ -9,14 +11,15 @@ initialize :: IO ()
 initialize = initializeNativeTarget
 
 buildReaderFun :: String -> CodeGenModule (Function (IO ()))
+--buildReaderFun :: String -> CodeGenModule (Function f)
 buildReaderFun nm = do
   puts <- newNamedFunction ExternalLinkage "puts" :: TFunction (Ptr Word8 -> IO Word32)
-  greetz <- (createStringNul "Panda") :: Array D42 Word8
-  func <- createFunction ExternalLinkage $ do
-    tmp <- getElementPtr greetz (0 :: Word32,(0 :: Word32, ()))
-    call puts  tmp -- Throw away return value.
-    ret ()
-  return func
+  let callPuts greetz = createFunction ExternalLinkage $ do
+          tmp <- getElementPtr greetz (0 :: Word32,(0 :: Word32, ()))
+          call puts  tmp -- Throw away return value.
+          ret ()
+  withStringNul nm callPuts
+--  return func
 
 
 -- Format spec -> filename 12
