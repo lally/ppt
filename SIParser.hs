@@ -105,12 +105,12 @@ commandFile =
                }
                
 
-testParse :: Show a => Parser a -> String -> Either ParseError a
-testParse p input = parse (do { SIParser.whiteSpace
+parseText :: Show a => Parser a -> String -> String -> Either ParseError a
+parseText p input fname = parse (do { SIParser.whiteSpace
                             ; x <- p
                             ; eof
                             ; return x
-                            }) "input" input
+                            }) fname input
 
 ------------------------------------------------------------
 -- In-memory layout
@@ -187,18 +187,16 @@ mapSizes frames =
      in changeType 0 firstSize frames
 
 
-
+{-
 showAllocations :: String -> [Allocation]
 showAllocations text = 
-    case testParse frameSpec text of
+    case parseText frameSpec text of
       Right (FrameSpecification _ xs) ->
           mapSizes xs
       Left _ -> []
-
+-}
 
 --
 -- NOTE: ghci has a dynamic-loading bug that'll generally prevent it from
 -- loading LLVM correctly. BUT, ghc will compile and link it fine.
 --
-main :: IO ()
-main = do { LC.initializeNativeTarget }

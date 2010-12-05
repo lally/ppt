@@ -3,8 +3,10 @@ module Main where
 import SIParser as Parse
 import StaticInstrumentation as Inst
 import Storage as S
+import Generate as Gen
+import Listener as L
 import System (getArgs)   
-    
+--import LLVM.Core as LC    
 {- Driver program for pt
    ---------------------
 
@@ -12,14 +14,24 @@ import System (getArgs)
  -}
 
 showHelp = do
-  putStrln "pt help -- This message"
-  putStrln "pt generate [options] <filename> -- Generate static instrumentation"
-  putStrln "   <filename> - The instrumentation spec"
-  putStrln "   options: "
-  putStrln "     -o name --- file base name"
+  putStrLn "pt help -- This message"
+  putStrLn "pt generate [options] <filename> -- Generate static instrumentation"
+  putStrLn "   <filename> - The instrumentation spec"
+  putStrLn "   options: "
+  putStrLn "     -o name --- file base name"
 
-main = do
-  -- Look at the command first.
-  config <- S.loadConfig
-  args <- getArgs
+
+runCommand :: [String] -> S.Config -> IO ()
+runCommand args cfg = do
+  if (length args) == 0 then showHelp else 
+    case head args of
+      "generate" -> Generate.generate (tail args) cfg
+      "help" -> showHelp
+      otherwise -> showHelp
   
+main = do
+  -- TODO: Look at the command first.
+  args <- getArgs
+  config <- S.loadConfig
+  L.initialize
+  runCommand args config
