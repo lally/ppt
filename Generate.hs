@@ -1,5 +1,6 @@
 module Generate where
 import Storage as S
+import Listener
 import System.IO
 import StaticInstrumentation as Inst
 import SIParser as SIP
@@ -84,7 +85,7 @@ writerFor LangC = LangWriter {
       "\n#define WRITE"++ (map toUpper name) ++ "_" ++ (map toUpper n) ++
       "(x) " ++ (gVarName name) ++ "." ++ n ++ "=x\n"
     cVar n = "ptframe_" ++ n ++ "_t " ++ (gVarName n) ++ ";\n"
-    cHandle n = 
+    cHandle n = "int "
     cPtrs n = undefined
     cWFrameDecl (FrameSpecification n es) = undefined
     cWFrameBody (FrameSpecification n es) = undefined
@@ -142,7 +143,7 @@ runParse file basefname = do
           putStrLn ("Generated " ++ header_name ++ 
                     " and " ++ source_name)
           
-
+      generateReader spec (basefname ++ ".lli")
   putStrLn (show result) 
   
 
