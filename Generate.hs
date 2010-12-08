@@ -1,6 +1,6 @@
 module Generate where
 import Storage as S
-import Listener
+import Listener as L
 import System.IO
 import StaticInstrumentation as Inst
 import SIParser as SIP
@@ -131,8 +131,9 @@ runParse file basefname = do
           writeFile header_name header >> 
           writeFile source_name source >>
           putStrLn ("Generated " ++ header_name ++ 
-                    " and " ++ source_name)
-              
+                    " and " ++ source_name) >>
+          L.generateReader spec (basefname ++ ".lli")
+    
         LangCpp ->
           let header_name = basefname ++ ".h"
               source_name = basefname ++ ".cpp"
@@ -141,9 +142,9 @@ runParse file basefname = do
           writeFile header_name header >>
           writeFile source_name source >>
           putStrLn ("Generated " ++ header_name ++ 
-                    " and " ++ source_name)
-          
-      generateReader spec (basefname ++ ".lli")
+                    " and " ++ source_name) >>
+          L.generateReader spec (basefname ++ ".lli")
+
   putStrLn (show result) 
   
 

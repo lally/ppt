@@ -25,7 +25,7 @@ runCommand :: [String] -> S.Config -> IO ()
 runCommand args cfg = do
   if (length args) == 0 then showHelp else 
     case head args of
-      "generate" -> Generate.generate (tail args) cfg
+      "generate" -> Gen.generate (tail args) cfg
       "help" -> showHelp
       otherwise -> showHelp
   
