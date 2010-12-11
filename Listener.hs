@@ -48,8 +48,12 @@ buildReaderFun nm  = do
   let callPuts format = (
         createNamedFunction ExternalLinkage "main" $ 
         \ argc argv -> do
-          tmp <- getElementPtr (argv ::Value (Ptr (Ptr Word8)))
-                 (0 :: Int32,  (1 :: Int32, ()))
+--          tmp <- getElementPtr (argv ::Value (Ptr (Ptr Word8)))
+--                 (0 :: Int32,  (1 :: Int32, ()))
+          tmp0 <- getElementPtr (argv ::Value (Ptr (Ptr Word8))) (0 :: Int32, ())
+          tmp1 <- load tmp0
+          tmp  <- getElementPtr tmp1 (1 :: Int32, ())
+
           _ <- call puts tmp
           ret (0 :: Int32)) :: CodeGenModule (MainFunction)
 
