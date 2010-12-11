@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, UndecidableInstances, ExistentialQuantification #-}
 module Listener (initialize, generateReader) where
 import StaticInstrumentation
 import LLVM.Core
@@ -32,7 +33,7 @@ buildReaderFormat (FrameSpecification nm specs) =
     formatString (FrameElement FInt _) = "%d"
     
             
-type MainFunction = Function (Int32 -> Ptr (Array D0 Word8) -> IO Int32)
+type MainFunction = Function (Int32 -> Ptr (Ptr Word8) -> IO Int32)
 
 {- Access to getIxList and getArg aren't allowed from here.  I'd
 have to modify the LLVM distro.
@@ -40,20 +41,16 @@ have to modify the LLVM distro.
 I guess I'll have to look at some pointer math?  Or, an array of
 arrays? -}
 
-{-
-instance GetElementPtr (Ptr Word8) (Word32, (Word32, ())) Word8 where
-  getIxList _ (v, i) = LLVM.Core.getArg v : LLVM.Core.getIxList (undefined :: Word8) -}
-
-buildReaderFun :: FrameSpecification -> CodeGenModule (MainFunction)
-buildReaderFun spec@(FrameSpecification nm _) = do
+buildReaderFun :: String -> CodeGenModule (MainFunction)
+buildReaderFun nm  = do
   puts <- newNamedFunction ExternalLinkage "puts" :: 
     TFunction (Ptr Word8 -> IO Word32)
   let callPuts format = (
         createNamedFunction ExternalLinkage "main" $ 
         \ argc argv -> do
-          tmp <- getElementPtr argv (0 :: Word32, 
-                                       (1 :: Word32, ()))
-          call puts tmp -- Throw away return value.
+          tmp <- getElementPtr (argv ::Value (Ptr (Ptr Word8)))
+                 (0 :: Int32,  (1 :: Int32, ()))
+          _ <- call puts tmp
           ret (0 :: Int32)) :: CodeGenModule (MainFunction)
 
   withStringNul nm callPuts 
@@ -72,7 +69,7 @@ generateReader (Spec kid specs) filename = do
   let pullName (FrameSpecification nm _) = nm 
   let names = map pullName specs 
   mod <- newNamedModule "TestModule"
-  defineModule mod (buildReaderFun (head specs))
+  defineModule mod (buildReaderFun (head names))
   writeBitcodeToFile filename mod
   
 -- TODO: put out a minimal .lli file, then make it more like my ideal listener
