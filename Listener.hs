@@ -35,26 +35,49 @@ buildReaderFormat (FrameSpecification nm specs) =
             
 type MainFunction = Function (Int32 -> Ptr (Ptr Word8) -> IO Int32)
 
-{- Access to getIxList and getArg aren't allowed from here.  I'd
-have to modify the LLVM distro.
-
-I guess I'll have to look at some pointer math?  Or, an array of
-arrays? -}
+--
+-- These will have to be generated from a configure script, probably from
+-- a platform-specific generation script.
+--
+-- Hmm, I could put these into a tuple type that I take as an argument,
+-- similar to the CPS-style I'll have to do for my structure types.
+type LibCOpenType = Function (Ptr Word8 -> Int32 -> IO Int32)
+type LibCCloseType = Function (Int32 -> IO Int32)
+type LibCWriteType = Function (Int32 -> Ptr Word8 -> Int64 -> IO Int64)
 
 buildReaderFun :: String -> CodeGenModule (MainFunction)
 buildReaderFun nm  = do
+  printf <- newNamedFunction ExternalLinkage "printf" :: TFunction (Ptr Word8 -> VarArgs Word32)
   puts <- newNamedFunction ExternalLinkage "puts" :: 
     TFunction (Ptr Word8 -> IO Word32)
+  open <- newNamedFunction ExternalLinkage "open" :: CodeGenModule(LibCOpenType)
+  close <- newNamedFunction ExternalLinkage "close" :: CodeGenModule(LibCCloseType)
+  write <- newNamedFunction ExternalLinkage "write" :: CodeGenModule(LibCWriteType)
+  pattern <- createStringNul "Loading file %s\n" 
+  
+  
   let callPuts format = (
         createNamedFunction ExternalLinkage "main" $ 
         \ argc argv -> do
---          tmp <- getElementPtr (argv ::Value (Ptr (Ptr Word8)))
---                 (0 :: Int32,  (1 :: Int32, ()))
-          tmp0 <- getElementPtr (argv ::Value (Ptr (Ptr Word8))) (0 :: Int32, ())
-          tmp1 <- load tmp0
-          tmp  <- getElementPtr tmp1 (1 :: Int32, ())
+          exit <- newBasicBlock
+          cont <- newBasicBlock
 
-          _ <- call puts tmp
+          --
+          -- First, verify that we have sufficient arguments
+          sufficient_args <- icmp IntSGE argc (2::Int32)
+          condBr sufficient_args cont exit
+          
+          defineBasicBlock exit
+          ret (1::Int32)
+
+          defineBasicBlock cont
+          p_arg1 <- getElementPtr (argv ::Value (Ptr (Ptr Word8))) (1 :: Int32, ())
+          arg1 <- load p_arg1
+          tmp  <- getElementPtr arg1 (0 :: Int32, ()) -- ptr to first char of argv[1]
+          pattern_p <- getElementPtr (pattern :: Global (Array D16 Word8)) (0 :: Word32, (0 :: Word32, ()))
+
+          let printf_s = castVarArgs printf :: Function (Ptr Word8 -> Ptr Word8 -> IO Word32)
+          _ <- call  printf_s pattern_p tmp
           ret (0 :: Int32)) :: CodeGenModule (MainFunction)
 
   withStringNul nm callPuts 

@@ -118,5 +118,18 @@ reading.  Else, stop there, and stop at the previous (max seqno) elem.
      - So damn portable it doesn't even run native!
      - Later on it can become the local platform agent.
        That's the name. ppt-agent -symlink-> ppt-solaris-agent
-       
+** Current status, new work
+   Using this toolchain:
+   function llvm () {
+      LD_LIBRARY_PATH=/lib:/usr/lib:/opt/local/lib:/opt/csw/lib "$@"
+   }
+   llvm opt -O2 beta1.lli >beta1b.lli
+   llvm llc beta1b.lli
+   gcc -o beta1b beta1b.lli.s
+   I can assemble & link the executable.
+   
+** Generated Code
+   Thankfully, the llvm distribution has an examples/ directory, which
+   covered VarArgs for me.
+
    
