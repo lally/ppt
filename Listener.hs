@@ -95,7 +95,7 @@ generateReader :: FullSpecification -> String -> IO ()
 generateReader (Spec kid specs) filename = do
   let pullName (FrameSpecification nm _) = nm 
   let names = map pullName specs 
-  mod <- newNamedModule "TestModule"
+  mod <- newNamedModule (head names)
   defineModule mod (buildReaderFun (head names))
   writeBitcodeToFile filename mod
   
