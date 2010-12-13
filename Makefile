@@ -34,3 +34,6 @@ test_attach: agent/test/test_attach.o
 
 dummy_client: agent/test/dummy_client.o
 	g++ -g -o $@ $^
+
+ppt: Main.hs Generate.hs StaticInstrumentation.hs Storage.hs SIParser.hs
+	ghc -o ppt --make Main.hs
