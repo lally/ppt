@@ -49,17 +49,9 @@ type LibCFCloseType = Function (Ptr FILE -> IO Int32)
 type LibCFWriteType = Function (Ptr Word8 -> Int32 -> Int32 ->Ptr FILE -> IO Int32)
 type LibCSetBufType = Function (Ptr FILE -> Ptr Word8 -> Int32 -> IO ())
 type LibCFPrintf = Function (Ptr Word8 -> Ptr Word8 -> VarArgs Word32)
-buildReaderFun :: String -> CodeGenModule (MainFunction)
-buildReaderFun nm  = do
-  printf <- newNamedFunction ExternalLinkage "printf" :: TFunction (Ptr Word8 -> VarArgs Word32)
-  puts <- newNamedFunction ExternalLinkage "puts" :: TFunction (Ptr Word8 -> IO Word32)
-  fprintf <- newNamedFunction ExternalLinkage "fprintf" :: CodeGenModule(LibCFPrintf) 
-  fopen <- newNamedFunction ExternalLinkage "fopen" :: CodeGenModule(LibCOpenType)
-  fclose <- newNamedFunction ExternalLinkage "fclose" :: CodeGenModule(LibCCloseType)
-  fwrite <- newNamedFunction ExternalLinkage "fwrite" :: CodeGenModule(LibCWriteType)
-  setbuf <- newNamedFunction ExternalLinkage "setbuf" :: CodeGenModule(LibCSetBufType)
-  pattern <- createStringNul "Loading file %s\n" 
-  
+type LibCatoi = Function (Ptr Word8 -> IO Int32)
+type LibCperror = Function (Ptr Word8 -> IO ())
+
   {- program:
      | Block           | Task                                 |
      |-----------------+--------------------------------------|
@@ -97,35 +89,113 @@ it runs against.
 
    -}
              
+getArgv :: Word32 -> Value (Ptr (Ptr Word8)) -> CodeGenFunction r (Value (Ptr Word8))
+getArgv n args = do
+  pp_arg <- getElementPtr args (n, ())
+  p_arg <- load pp_arg
+  arg <- getElementPtr p_arg (0::Word32, ())
+  return arg
+  
+buildReaderFun :: String -> CodeGenModule (MainFunction)
+buildReaderFun nm  = do
+  printf <- (newNamedFunction ExternalLinkage "printf" 
+             :: TFunction (Ptr Word8 -> VarArgs Word32))
+            
+  puts <- (newNamedFunction ExternalLinkage "puts" 
+           :: TFunction (Ptr Word8 -> IO Word32))
+
+  fprintf <- (newNamedFunction ExternalLinkage "fprintf" 
+              :: CodeGenModule(LibCFPrintf))
+             
+  fopen <- (newNamedFunction ExternalLinkage "fopen" 
+            :: CodeGenModule(LibCFOpenType))
+           
+  fclose <- (newNamedFunction ExternalLinkage "fclose" 
+             :: CodeGenModule(LibCFCloseType))
+            
+  fwrite <- (newNamedFunction ExternalLinkage "fwrite" 
+             :: CodeGenModule(LibCFWriteType))
+            
+  setbuf <- (newNamedFunction ExternalLinkage "setbuf" 
+             :: CodeGenModule(LibCSetBufType))
+            
+  atoi <- (newNamedFunction ExternalLinkage "atoi"
+           :: CodeGenModule(LibCatoi))
+          
+  perror <- (newNamedFunction ExternalLinkage "perror"
+             :: CodeGenModule(LibCperror))
+            
+  pattern <- createStringNul "Loading file %s\n" 
+  fopen_args <- createStringNul "a"
+  
              
   let callPuts format = (
         createNamedFunction ExternalLinkage "main" $ 
         \ argc argv -> do
           exit <- newBasicBlock
+          load_args <- newBasicBlock
+          p_exit <- newBasicBlock
           loop_head <- newBasicBlock
           writebuf <- newBasicBlock
           determine_sleep <- newBasicBlock
           do_sleep <- newBasicBlock
-          args <- newBasicBlock
+          try_shmat <- newBasicBlock
+          try_fopen <- newBasicBlock
+          
 
           --
           -- First, verify that we have sufficient arguments
           sufficient_args <- icmp IntSGE argc (2::Int32)
-          condBr sufficient_args cont exit
+          condBr sufficient_args load_args exit
           
+          --
+          -- exit: just exit(1)
           defineBasicBlock exit
           ret (1::Int32)
 
-          defineBasicBlock args
-          p_arg1 <- getElementPtr (argv ::Value (Ptr (Ptr Word8))) (1 :: Int32, ())
-          arg1 <- load p_arg1
-          -- tmp = ptr to first char of argv[1]
-          tmp  <- getElementPtr arg1 (0 :: Int32, ()) 
+          --
+          -- load_args: call atoi on the shared memory args
+          defineBasicBlock load_args
+          s_shmid <- getArgv 2 argv
+          s_shmsz <- getArgv 3 argv
+          shmid <- call atoi s_shmid
+          shmsz <- call atoi s_shmsz
+          shmsz' <- icmp IntSGT shmsz (0 :: Int32)
+          condBr shmsz' try_shmat exit -- validate the size as > 0.
+          
+          --
+          -- try_fopen: try to fopen the output file.
+          defineBasicBlock try_fopen
+          
+          pp_arg1 <- getElementPtr (argv ::Value (Ptr (Ptr Word8))) (1 :: Int32, ())
+          p_arg1 <- load pp_arg1
+          -- arg1 = ptr to first char of argv[1]
+          arg1  <- getElementPtr p_arg1 (0 :: Int32, ()) 
+          fopen_arg <- getElementPtr0 (fopen_args :: Global (Array D2 Word8)) (
+            0 :: Word32, ())
+                       
+          outfile <- call fopen arg1 fopen_arg
+          nullptr_file <- (inttoptr (valueOf 0)) 
+          outfile_ok <- icmp IntNE outfile (nullptr_file :: Value (Ptr FILE))
+          condBr outfile_ok try_shmat p_exit
+          
           pattern_p <- getElementPtr (pattern :: Global (Array D16 Word8)) (0 :: Word32, (0 :: Word32, ()))
           let printf_s = castVarArgs printf :: Function (Ptr Word8 -> Ptr Word8 -> IO Word32)
-          _ <- call  printf_s pattern_p tmp
-          ret (0 :: Int32)) :: CodeGenModule (MainFunction)
+          _ <- call  printf_s pattern_p fopen_arg
+          ret (0 :: Int32)
 
+          {- exit with a call to perror().  Our string is phi:
+           | Block     | Var  |
+           |-----------+------|
+           | try_fopen | arg1 |
+           -}
+          defineBasicBlock p_exit
+          err_str <- phi [(arg1, try_fopen)]
+          call perror err_str
+          ret (1 :: Int32)
+          
+          ) :: CodeGenModule (MainFunction)
+  
   withStringNul nm callPuts 
   
 -- Format spec -> filename 12
