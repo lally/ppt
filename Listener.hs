@@ -39,18 +39,20 @@ type MainFunction = Function (Int32 -> Ptr (Ptr Word8) -> IO Int32)
 -- These will have to be generated from a configure script, probably from
 -- a platform-specific generation script.
 --
--- Hmm, I could put these into a tuple type that I take as an argument,
--- similar to the CPS-style I'll have to do for my structure types.
---
--- We're glancing over the fact that we don't have FILE defined.  Just Ptr Word8
+-- We're glancing over the fact that we don't have FILE defined.  Just
+-- Ptr Word8.  Well, we're glancing over the fact that I'm defining
+-- these to my convenience.  E.g. shmat's returning a uint8* instead
+-- of void*.
 type FILE = Word8 -- ok, this is easier to read
 type LibCFOpenType = Function (Ptr Word8 -> Ptr Word8 -> IO (Ptr FILE))
 type LibCFCloseType = Function (Ptr FILE -> IO Int32)
 type LibCFWriteType = Function (Ptr Word8 -> Int32 -> Int32 ->Ptr FILE -> IO Int32)
 type LibCSetBufType = Function (Ptr FILE -> Ptr Word8 -> Int32 -> IO ())
 type LibCFPrintf = Function (Ptr Word8 -> Ptr Word8 -> VarArgs Word32)
+type LibCFFlush = Function (Ptr Word8 -> IO Int32)
 type LibCatoi = Function (Ptr Word8 -> IO Int32)
 type LibCperror = Function (Ptr Word8 -> IO ())
+type LibCshmat = Function (Int32 -> Ptr Word8 -> Int32 -> IO (Ptr Word8))
 
   {- program:
      | Block           | Task                                 |
@@ -95,7 +97,24 @@ getArgv n args = do
   p_arg <- load pp_arg
   arg <- getElementPtr p_arg (0::Word32, ())
   return arg
+
+
+--outputStruct :: Struct (a) ->
   
+outFrameAtOff :: [FrameElement] -> Value (Ptr Word8) -> (Value (Ptr FILE)) -> CodeGenFunction r (Value Word32)
+outFrameAtOff fr p f = buildOutput fr (reverse fr) (length fr) p f
+              where
+                buildOutput structValue  [] fr n p f = do
+                      
+                buildOutput tail (x:xs) fr n p f = 
+                  case x of
+                       FrameElement FDouble _ = buildOutput ( Double :& tail ) xs n p f
+                       FrameElement FFloat _ = buildOutput (Float :& tail) xs n p f
+                       FrameElement FInt _ = buildOutput (Int :& tail) xs n p f
+
+                 
+
+
 buildReaderFun :: String -> CodeGenModule (MainFunction)
 buildReaderFun nm  = do
   printf <- (newNamedFunction ExternalLinkage "printf" 
@@ -115,7 +134,10 @@ buildReaderFun nm  = do
             
   fwrite <- (newNamedFunction ExternalLinkage "fwrite" 
              :: CodeGenModule(LibCFWriteType))
-            
+
+  fflush <- (newNamedFunction ExternalLinkage "fflush"
+             :: CodeGenModule(LibCFFlush))
+             
   setbuf <- (newNamedFunction ExternalLinkage "setbuf" 
              :: CodeGenModule(LibCSetBufType))
             
@@ -124,17 +146,20 @@ buildReaderFun nm  = do
           
   perror <- (newNamedFunction ExternalLinkage "perror"
              :: CodeGenModule(LibCperror))
+
+  shmat <- (newNamedFunction ExternalLinkage "shmat"
+             :: CodeGenModule(LibCshmat))
             
   pattern <- createStringNul "Loading file %s\n" 
   fopen_args <- createStringNul "a"
-  
              
-  let callPuts format = (
+  let callPuts struct_size format = (
         createNamedFunction ExternalLinkage "main" $ 
         \ argc argv -> do
           exit <- newBasicBlock
           load_args <- newBasicBlock
           p_exit <- newBasicBlock
+          init_vars <- newBasicBlock
           loop_head <- newBasicBlock
           writebuf <- newBasicBlock
           determine_sleep <- newBasicBlock
@@ -149,11 +174,6 @@ buildReaderFun nm  = do
           condBr sufficient_args load_args exit
           
           --
-          -- exit: just exit(1)
-          defineBasicBlock exit
-          ret (1::Int32)
-
-          --
           -- load_args: call atoi on the shared memory args
           defineBasicBlock load_args
           s_shmid <- getArgv 2 argv
@@ -166,7 +186,6 @@ buildReaderFun nm  = do
           --
           -- try_fopen: try to fopen the output file.
           defineBasicBlock try_fopen
-          
           pp_arg1 <- getElementPtr (argv ::Value (Ptr (Ptr Word8))) (1 :: Int32, ())
           p_arg1 <- load pp_arg1
           -- arg1 = ptr to first char of argv[1]
@@ -175,28 +194,48 @@ buildReaderFun nm  = do
             0 :: Word32, ())
                        
           outfile <- call fopen arg1 fopen_arg
-          nullptr_file <- (inttoptr (valueOf 0)) 
+          nullptr_file <- inttoptr (valueOf (0 :: Int32))
           outfile_ok <- icmp IntNE outfile (nullptr_file :: Value (Ptr FILE))
           condBr outfile_ok try_shmat p_exit
+
+          --
+          -- try_shmat: open up the shared memory
+          nullptr_word8 <- inttoptr (valueOf (0 :: Int32))
+          array_start <- call shmat shmid nullptr_word8 (valueOf 0o400)
+          shmat_ok <- icmp IntNE array_start (nullptr_word8 :: Value (Ptr Word8))
+          condBr shmat_ok init_vars p_exit
+
+          --
+          -- init_vars: set up loop variables
+          defineBasicBlock init_vars
+          array_length <- mul shmsz (valueOf (struct_size :: Int32))
+          array_end <- getElementPtr array_start (array_length, ())
           
           pattern_p <- getElementPtr (pattern :: Global (Array D16 Word8)) (0 :: Word32, (0 :: Word32, ()))
           let printf_s = castVarArgs printf :: Function (Ptr Word8 -> Ptr Word8 -> IO Word32)
-          _ <- call  printf_s pattern_p fopen_arg
+          _ <- call printf_s pattern_p fopen_arg
           ret (0 :: Int32)
 
           {- exit with a call to perror().  Our string is phi:
-           | Block     | Var  |
-           |-----------+------|
-           | try_fopen | arg1 |
+           | Block     | Var     |
+           |-----------+---------|
+           | try_fopen | arg1    |
+           | try_shmat | s_shmid | Note: s_shmid isn't *in* try_shmat, but it's the
+           |           |         | string version of shmid.
            -}
           defineBasicBlock p_exit
-          err_str <- phi [(arg1, try_fopen)]
+          err_str <- phi [(arg1, try_fopen), (s_shmid, try_shmat)]
           call perror err_str
           ret (1 :: Int32)
           
+          --
+          -- exit: just exit(1)
+          defineBasicBlock exit
+          ret (1::Int32)
+
           ) :: CodeGenModule (MainFunction)
   
-  withStringNul nm callPuts 
+  withStringNul nm (callPuts 8)
   
 -- Format spec -> filename 12
 generateReader :: FullSpecification -> String -> IO ()
@@ -207,5 +246,3 @@ generateReader (Spec kid specs) filename = do
   defineModule mod (buildReaderFun (head names))
   writeBitcodeToFile filename mod
   
--- TODO: put out a minimal .lli file, then make it more like my ideal listener
--- then run the optimizer.
