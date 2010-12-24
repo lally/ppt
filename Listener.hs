@@ -105,7 +105,7 @@ outFrameAtOff :: [FrameElement] -> Value (Ptr Word8) -> (Value (Ptr FILE)) -> Co
 outFrameAtOff fr p f = buildOutput fr (reverse fr) (length fr) p f
               where
                 buildOutput structValue  [] fr n p f = do
-                      
+                  
                 buildOutput tail (x:xs) fr n p f = 
                   case x of
                        FrameElement FDouble _ = buildOutput ( Double :& tail ) xs n p f

@@ -154,7 +154,7 @@ reading.  Else, stop there, and stop at the previous (max seqno) elem.
 | > reifyIntegral i f 
 | >  | i < 0     = error "reifyIntegral: integral < 0"
 | >  | i == 0    = f (undefined :: D0)
-| >  | otherwise = reifyIntegralp i f 
+| >  | otherwise = reifyIntegralp i f                       return 0
 | >        -- reifyIntegral for positives
 | >  where reifyIntegralp :: Integral i => i -> (forall n . Pos n => n -> r) -> r
 | >        reifyIntegralp i f 
