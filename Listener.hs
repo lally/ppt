@@ -2,6 +2,8 @@
 module Listener (initialize, generateReader) where
 import StaticInstrumentation
 import LLVM.Core
+import Configuration
+import SIParser (implement)
 --import LLVM.Core.FFI
 --import LLVM.Core.Util as CU
 import Data.TypeLevel.Num.Reps
@@ -98,7 +100,7 @@ getArgv n args = do
   arg <- getElementPtr p_arg (0::Word32, ())
   return arg
 
-
+{-
 --outputStruct :: Struct (a) ->
   
 outFrameAtOff :: [FrameElement] -> Value (Ptr Word8) -> (Value (Ptr FILE)) -> CodeGenFunction r (Value Word32)
@@ -112,11 +114,11 @@ outFrameAtOff fr p f = buildOutput fr (reverse fr) (length fr) p f
                        FrameElement FFloat _ = buildOutput (Float :& tail) xs n p f
                        FrameElement FInt _ = buildOutput (Int :& tail) xs n p f
 
-                 
+  -}               
 
 
-buildReaderFun :: String -> CodeGenModule (MainFunction)
-buildReaderFun nm  = do
+buildReaderFun :: String -> Int32 -> CodeGenModule (MainFunction)
+buildReaderFun nm skip = do
   printf <- (newNamedFunction ExternalLinkage "printf" 
              :: TFunction (Ptr Word8 -> VarArgs Word32))
             
@@ -153,7 +155,7 @@ buildReaderFun nm  = do
   pattern <- createStringNul "Loading file %s\n" 
   fopen_args <- createStringNul "a"
              
-  let callPuts struct_size format = (
+  let callPuts format = (
         createNamedFunction ExternalLinkage "main" $ 
         \ argc argv -> do
           exit <- newBasicBlock
@@ -208,7 +210,7 @@ buildReaderFun nm  = do
           --
           -- init_vars: set up loop variables
           defineBasicBlock init_vars
-          array_length <- mul shmsz (valueOf (struct_size :: Int32))
+          array_length <- mul shmsz (valueOf ((skip * 4) :: Int32))
           array_end <- getElementPtr array_start (array_length, ())
           
           pattern_p <- getElementPtr (pattern :: Global (Array D16 Word8)) (0 :: Word32, (0 :: Word32, ()))
@@ -235,14 +237,18 @@ buildReaderFun nm  = do
 
           ) :: CodeGenModule (MainFunction)
   
-  withStringNul nm (callPuts 8)
+  withStringNul nm callPuts
   
 -- Format spec -> filename 12
-generateReader :: FullSpecification -> String -> IO ()
-generateReader (Spec kid specs) filename = do
+generateReader :: RunConfig -> FullSpecification -> String -> IO ()
+generateReader cfg s@(Spec kid specs) filename = do
   let pullName (FrameSpecification nm _) = nm 
-  let names = map pullName specs 
+      names = map pullName specs 
+      impl@(Impl _ (f:fs)) = implement cfg s
+      frame@(FrameImpl _ mems) = f
+      total = sum $ map (implSize cfg) mems
+      nwords = (fromIntegral (total `div` 4)) :: Int32
   mod <- newNamedModule (head names)
-  defineModule mod (buildReaderFun (head names))
+  defineModule mod (buildReaderFun (head names) nwords)
   writeBitcodeToFile filename mod
   

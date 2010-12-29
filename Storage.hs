@@ -1,10 +1,12 @@
-module Storage (Config, loadConfig, binaryPath, specPath, makeSpecPath) where
+module Storage (loadConfig, binaryPath, specPath, makeSpecPath, createConfig) where
 {- Imlements basic path storage policy -}
 
 {- Currently just the ./.ppt/ folder path, but will hold more settings
    later (presumably from a config file) -}
 import System.FilePath.Posix
-import System.Posix.Directory
+--import System.Posix.Directory
+import System.Directory
+import Control.Monad (liftM, liftM2)
 import System.Posix.Files
 import qualified StaticInstrumentation as SI
 import Data.ByteString.Internal (c2w)
@@ -13,19 +15,49 @@ import Data.String.Utils (split, join)
 import System.IO (FilePath)
 import Monad (filterM)
 import Control.Monad (liftM)
-import Data.List (inits)
-data Config = Config FilePath
+import Data.List (inits, tails)
+import Configuration
 
-loadConfig :: IO (Config)
-loadConfig = return (Config "./.ppt/")
-            
+readTargetSpec :: FilePath -> IO (MachineTarget)
+readTargetSpec dir = do
+               let fname = dir ++ "/target"
+               exists <- doesFileExist fname
+               target <- if exists then (liftM read (readFile fname)) else return Target64
+               return target
+               
+
+{-
+        Find, from the current directory up, the .ppt directory.
+        When found, load up the target information
+-}
+loadConfig :: IO (Maybe RunConfig)
+loadConfig = do
+           cwd <- getCurrentDirectory
+           let up_dirs = map (join "/") $ reverse $ tail $ inits $ tail $ split "/" cwd
+           let up_paths = map (\x -> "/" ++ x) $ up_dirs
+           proper_dirs <- liftM (take 1) $ filterM (\x -> doesDirectoryExist (x ++ "/.ppt/")) up_paths
+           case proper_dirs of
+                [] -> return Nothing
+                -- load the target data
+                otherwise -> do let dir = head proper_dirs
+                                target  <- readTargetSpec dir
+                                return (Just (RunConfig (dir ++ "/.ppt/") target))
+
+createConfig :: IO (RunConfig)
+createConfig = do
+             createDirectory "./.ppt" 
+             writeFile "./.ppt/target" (show defaultTarget)
+             cwd <- getCurrentDirectory
+             let ppt_dir = cwd ++ "/.ppt/"
+             return (RunConfig ppt_dir defaultTarget)
+             
 -- binaryPath "~/.ppt" binaryVersion
-binaryPath :: Config -> String -> FilePath
-binaryPath (Config cfg) nm = cfg ++ "generated/" ++ nm
+binaryPath :: RunConfig -> String -> FilePath
+binaryPath (RunConfig cfg _) nm = cfg ++ "generated/" ++ nm
 
 -- specPath returns a folder name for the specified FrameSpecification
-specPath :: Config -> SI.FrameSpecification -> FilePath
-specPath (Config cfg) spec@(SI.FrameSpecification name elems) =
+specPath :: RunConfig -> SI.FrameSpecification -> FilePath
+specPath (RunConfig cfg _) spec@(SI.FrameSpecification name elems) =
          let hash = concatMap show (SI.specHash spec)
           in cfg ++ "static/" ++ name ++ "/" ++ hash ++ "/"
 
@@ -34,9 +66,9 @@ unknownPaths paths = do filterM ((liftM not) . fileExist) paths
 
 -- create (if needed) the path for 'specPath' for this
 -- config/framespec pair to work.
-makeSpecPath :: Config -> SI.FrameSpecification -> IO ()
+makeSpecPath :: RunConfig -> SI.FrameSpecification -> IO ()
 makeSpecPath cfg spec = do
-             let paths = map (flip (++) "/") $ filter (\x -> length x > 0) $ split "/" (specPath cfg spec)
-             let prefices = tail (map concat $ inits paths)
-             unknown_paths <- filterM ((liftM not) . fileExist) prefices
-             mapM_ ((flip createDirectory) 0o775) unknown_paths
+             let backward_path_segs = tails $ tail $reverse $ tail $ split "/" (specPath cfg spec)
+             let path_candidates = map (\xs -> "/" ++ (join "/" $ reverse xs) ++ "/") backward_path_segs
+             not_exist_rev <- filterM ((liftM not) . doesDirectoryExist) path_candidates
+             mapM_ createDirectory $ reverse not_exist_rev

@@ -1,4 +1,5 @@
 module Generate where
+import Configuration
 import Storage as S
 import Listener as L
 import System.IO
@@ -100,6 +101,7 @@ writerFor LangC = LangWriter {
     cMember (FrameElement FDouble n) = "double " ++ n 
     cMember (FrameElement FFloat n) = "float " ++ n
     cMember (FrameElement FInt n) = "int " ++ n
+    cMember (FrameElement FTime n) = "struct timeval " ++ n
     cFrame fname mems = 
       "typedef struct ppt_tag_struct_" ++ fname ++ 
       " {\n\tint _ppt__seqno;\n" ++
@@ -165,7 +167,7 @@ emitC (Spec emit fs) (hname, sname) =
   -}
   let
     headerGuards fname inner = 
-      "#ifndef " ++ sym ++ "\n#define " ++ sym ++ "\n" ++ inner ++ 
+      "#ifndef " ++ sym ++ "\n#define " ++ sym ++ "\n#include <sys/time.h>\n" ++ inner ++ 
       "\n#endif /* #ifdef " ++ sym ++ "*/\n"
       where sym = "INCLUDE_" ++ (map toUpper (replace "." "_" fname))
 
@@ -174,13 +176,15 @@ emitC (Spec emit fs) (hname, sname) =
     source = "/* implement me too */\n"
   in (header, source)
 
-runParse :: String -> String -> Config -> IO ()
+runParse :: String -> String -> RunConfig -> IO ()
 runParse file basefname cfg = do
   text <- readFile file 
   let result = SIP.parseText SIP.commandFile text file
   case result of
     Left err -> putStrLn ("ERROR: " ++ (show err))
     Right spec@(Spec emit frames) ->
+      let impl = implement cfg spec in
+      putStrLn (show impl) >>
       case emit of
         LangC ->
           let f1 = head frames in
@@ -206,7 +210,7 @@ runParse file basefname cfg = do
 --  putStrLn (show result) 
   
 
-generate :: [String] -> S.Config -> IO ()
+generate :: [String] -> RunConfig -> IO ()
 generate args cfg = do 
   let res = GO.getOpt GO.Permute arglist args
   case res of
