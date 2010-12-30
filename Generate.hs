@@ -3,14 +3,17 @@ import Configuration
 import Storage as S
 import Listener as L
 import System.IO
+import Generate.C as C
 import StaticInstrumentation as Inst
 import SIParser as SIP
 import System.Console.GetOpt as GO
 import Data.Char (toUpper)
 import Data.List (find)
-import Data.List.Utils (replace)
+--import Data.List.Utils (replace)
 import Data.Word (Word8)
-import Data.String.Utils (join)
+--import Data.String.Utils (join)
+import Scratch
+
 
 generateC :: Inst.FullSpecification -> String
 generateC inst = show inst
@@ -54,6 +57,9 @@ arglist = [GO.Option ['o'] ["output"] (GO.ReqArg OutputFile "output")
     frame_write routine 
    }
 -}
+
+
+
 
 data LanguageWriter = LangWriter {
   -- emit a single member definition

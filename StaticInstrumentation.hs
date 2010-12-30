@@ -1,5 +1,5 @@
 module StaticInstrumentation where
-import qualified Data.Digest.MD5 as MD5
+--import qualified Data.Digest.MD5 as MD5
 import Data.ByteString.Internal (c2w)
 import Data.Word (Word8)
 -- Datatype declarations used by a few other modules
@@ -30,7 +30,7 @@ data FullSpecification = Spec EmissionSpec [FrameSpecification]
                          deriving Show
 
 specHash :: FrameSpecification -> [Word8]
-specHash spec = MD5.hash (map c2w (show spec))
+specHash spec = undefined -- MD5.hash (map c2w (show spec))
 
 data ImplMemberType = IMDouble
                     | IMFloat
