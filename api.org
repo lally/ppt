@@ -97,7 +97,7 @@ reading.  Else, stop there, and stop at the previous (max seqno) elem.
    We have to store what version of the software we measured.
    This could be a (filename, last file write date, hash) tuple.
    
-* Current (v0.1 - thesis) release
+=* Current (v0.1 - thesis) release
   use .ppt, save in .ppt/readers.
   Single threaded, single project.
 
@@ -118,5 +118,64 @@ reading.  Else, stop there, and stop at the previous (max seqno) elem.
      - So damn portable it doesn't even run native!
      - Later on it can become the local platform agent.
        That's the name. ppt-agent -symlink-> ppt-solaris-agent
-       
+** Current status, new work
+   Using this toolchain:
+   function llvm () {
+      LD_LIBRARY_PATH=/lib:/usr/lib:/opt/local/lib:/opt/csw/lib "$@"
+   }
+   llvm opt -O2 beta1.lli >beta1b.lli
+   llvm llc beta1b.lli
+   gcc -o beta1b beta1b.lli.s
+   I can assemble & link the executable.
    
+** Generated Code
+   Thankfully, the llvm distribution has an examples/ directory, which
+   covered VarArgs for me.
+
+   
+** Current Status   
+*** <2010-12-21 Tue> The generated function
+    General structure is in writeup.
+
+    reifying the struct.
+    it doesn't use pure tuple types, it uses a nice list-like
+    structure with :&!!  I can work with that, I believe.
+
+    The current 'callPuts' needs to take another arg, to a function
+    that'll do the actual read & fprintf().  That function will do the
+    equivalent of 'defineBasicBlock', reading the type from memory and
+    then incrementing the pointer.
+
+    We'll need a wrapper that'll build the getElement
+
+
+| > -- | Reification function. In CPS style (best possible solution)
+| > reifyIntegral :: Integral i => i -> (forall n . Nat n => n -> r) -> r
+| > reifyIntegral i f 
+| >  | i < 0     = error "reifyIntegral: integral < 0"
+| >  | i == 0    = f (undefined :: D0)
+| >  | otherwise = reifyIntegralp i f                       return 0
+| >        -- reifyIntegral for positives
+| >  where reifyIntegralp :: Integral i => i -> (forall n . Pos n => n -> r) -> r
+| >        reifyIntegralp i f 
+| >          | i < 10 = case i of
+| >                      1 -> f (undefined :: D1)
+| >                      2 -> f (undefined :: D2); 3 -> f (undefined :: D3)
+| >                      4 -> f (undefined :: D4); 5 -> f (undefined :: D5)
+| >                      6 -> f (undefined :: D6); 7 -> f (undefined :: D7)
+| >                      8 -> f (undefined :: D8); 9 -> f (undefined :: D9)
+| >          | otherwise =  
+| >             case m of
+| >               0 -> reifyIntegralp d (\ (_::e) -> f (undefined :: e :* D0)) 
+| >               1 -> reifyIntegralp d (\ (_::e) -> f (undefined :: e :* D1))
+| >               2 -> reifyIntegralp d (\ (_::e) -> f (undefined :: e :* D2))
+| >               3 -> reifyIntegralp d (\ (_::e) -> f (undefined :: e :* D3))
+| >               4 -> reifyIntegralp d (\ (_::e) -> f (undefined :: e :* D4))
+| >               5 -> reifyIntegralp d (\ (_::e) -> f (undefined :: e :* D5))
+| >               6 -> reifyIntegralp d (\ (_::e) -> f (undefined :: e :* D6))
+| >               7 -> reifyIntegralp d (\ (_::e) -> f (undefined :: e :* D7))
+| >               8 -> reifyIntegralp d (\ (_::e) -> f (undefined :: e :* D8))
+| >               9 -> reifyIntegralp d (\ (_::e) -> f (undefined :: e :* D9))      
+| >            where (d,m) = divMod i 10
+
+

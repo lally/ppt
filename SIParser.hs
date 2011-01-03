@@ -1,4 +1,4 @@
-module SIParser where
+module SIParser ( parseText, commandFile, PadBlock, buildPBs, implement ) where
 
 import Text.ParserCombinators.Parsec (sepBy, try, char, eof,
                                       many, ParseError,
@@ -7,42 +7,18 @@ import Text.ParserCombinators.Parsec.Language
 import Text.ParserCombinators.Parsec.Prim (parse)
 import Text.ParserCombinators.Parsec.Token as P
 import List (sortBy)
---import LLVM.Core as LC
-
+import Configuration
 import StaticInstrumentation
     
 --
 -- Parser types
 -- 
 
---- Note: these are *really* simplistic types.  I'd like to pop in an
---- 'average' field here.  But that's less-frequent data (and a little
---- cooked), so let's save that for later.
-{-
-data FrameType = FDouble 
-               | FFloat 
-               | FInt
-                 deriving Show
-
-data FrameElement = FrameElement FrameType String
-                    deriving Show
-
-data FrameSpecification = FrameSpecification String [FrameElement]
-                          deriving Show
-
-data EmissionSpec = LangC 
-                  | LangCpp
-                    deriving Show
-data FullSpecification = Spec EmissionSpec [FrameSpecification]
-                         deriving Show
-
--}
---emitType :: GenParser Char st EmissionSpec
 
 lexer :: TokenParser ()
 lexer = makeTokenParser 
          (javaStyle {
-            reservedNames = [ "emit", "frame", "double", "int", "float" ]
+            reservedNames = [ "emit", "frame", "double", "int", "float", "time" ]
           , caseSensitive = True
           } )
 
@@ -73,6 +49,7 @@ emitType = do { SIParser.reserved "emit"
 elementType = ( SIParser.reserved "double" >> return FDouble )
               <|> ( SIParser.reserved "int" >> return FInt )
               <|> ( SIParser.reserved "float" >> return FFloat )
+              <|> ( SIParser.reserved "time" >> return FTime )
               <?> "type name"
 
 element = do { typ <- elementType
@@ -116,87 +93,77 @@ parseText p input fname = parse (do { SIParser.whiteSpace
 -- In-memory layout
 
 
+-- [elements in right now] (current size)
+data PadBlock = PB [ImplMember] Int
 
--- The cache line size we're optimizing for.
-cacheLineSize = 64 
 
--- The minimal alignment of this architecture
-alignment :: Int
-alignment = 4
+maxSize :: RunConfig -> [ImplMember] -> Int
+maxSize _ [] = 0
+maxSize c xs = maximum $ map (implSize c) xs
 
--- sizes of types
-sizeof :: FrameType -> Int
-sizeof FDouble = 8
-sizeof FFloat = 4
-sizeof FInt = 4
+memPrefix :: RunConfig -> [ImplMember] -> Int -> ([ImplMember], [ImplMember])
+memPrefix cfg ms n = memPrefix' ms n []
+          where 
+          -- memPrefix :: remainder -> max sz -> current list -> (new current list, new remainder)
+          memPrefix' :: [ImplMember] -> Int -> [ImplMember] -> ([ImplMember], [ImplMember])
+          memPrefix' [] n ts | n > 0 = (ts ++ [(ImplMember Nothing (IMPad n))], [])
+                             | otherwise = (ts, [])
+          memPrefix' ms 0 ts = (ts, ms)
+          memPrefix' r@(m:ms) n ts | sz <= n = memPrefix' ms (n - sz) (m:ts)
+                                   | otherwise = (ts ++ [(ImplMember Nothing (IMPad n))], r)
+                                   where sz = implSize cfg m
 
-{- ALGORITHM
 
-Requirements:
- - Some elements are *paired*, requiring that they all fit in the same cache-
-   line
- - Minimize the number of cache lines required.
- - We can reorder elements at will: only the final ordering matters.
+mapElements :: [FrameElement] -> [ImplMember]
+mapElements xs = map mapElement xs
+            where mapElement e@(FrameElement t n) = ImplMember (Just e) (mapType t)
+                  mapType FDouble = IMDouble
+                  mapType FFloat = IMFloat
+                  mapType FInt = IMInt
+                  mapType FTime = IMTime
 
-Algorithm:
- - Start off with the optimal situation for unpaired types: sort by size,
-   then you minimize padding. Call this the primary set
- - Then, as long as there are pairs:
-   - Pull a pair out, place it into its own cache line at the front.  Make it
-     part of the 'candidate set'
-   - Merge any candidates together that'll fit together in a cache line.
- - Define the final structure as a set of inner structures, padded to 64-byte
-   boundaries. 
-
-FOR NOW
- - no pairing.  Just sort by size.
--}
-
-elemSize :: FrameElement -> Int
-elemSize (FrameElement a _) = sizeof a
-
-allocateSizes :: FrameSpecification -> [FrameElement]
-allocateSizes (FrameSpecification _ elems) =
+sortByAscendingSizes :: RunConfig -> [ImplMember] -> [ImplMember]
+sortByAscendingSizes cfg elems = 
     let ordering a b
-            | (elemSize a) < (elemSize b) = LT
+            | (implSize cfg a) > (implSize cfg b) = LT
             | otherwise = GT
      in sortBy ordering elems
 
-data Allocation = Allocation {
-      offset :: Int -- relative to the containing allcoator.
-    , frameElem :: FrameElement 
-    } deriving Show 
+--  buildPBs
+--  ========
 
-mapSizes :: [FrameElement] -> [Allocation]
-mapSizes [] = []
-mapSizes frames =
-    let modUp off amt = 
-            (1+ (off `div` amt)) * amt
-        changeType off priorSize [] = []
-        changeType off priorSize (x:xs) 
-                   | priorSize < (elemSize x) = 
-                       let sz = elemSize x
-                           nextoff = modUp off (max alignment sz)
-                           xalloc = Allocation { offset = nextoff, frameElem = x }
-                        in xalloc:(changeType (nextoff + sz) sz xs)
-                   | otherwise = 
-                       let xalloc = Allocation { offset = off, frameElem = x }
-                           sz = elemSize x
-                        in xalloc:(changeType (off + sz) sz xs)
-        firstSize = elemSize (head frames)
-     in changeType 0 firstSize frames
+--  'buildPBs' works by first sorting the elements by (increasing)
+-- size, determine the largest item, then tightly-pack (and align)
+-- these objects.  The procedure is not terribly different from what a
+-- compiler normally does, but this way we get exact alignments for
+-- the sake of the LLVM code.
 
+--  After determining the largest element, we build a sequence of
+-- pad-blocks.  Every element will be allocated to a pad-block.
+-- Pad-blocks will have as many elements as we can fit, with
+-- additional padding bytes added as needed.  Each pad-block is the
+-- size of the largest single type, so that a value of the largest
+-- type is both alone in its block and aligned to its natural size (by
+-- virtue of the pad-blocks being aligned to the same modulus).
 
-{-
-showAllocations :: String -> [Allocation]
-showAllocations text = 
-    case parseText frameSpec text of
-      Right (FrameSpecification _ xs) ->
-          mapSizes xs
-      Left _ -> []
--}
+-- We're also taking advantage of the fact that all the sizes are
+-- powers of two.  So, we'll just need two of a single type to fill in
+-- the next-largest pad-block size.  We may have to repeat.  If we run
+-- out, we'll just add in pad blocks.
 
---
--- NOTE: ghci has a dynamic-loading bug that'll generally prevent it from
--- loading LLVM correctly. BUT, ghc will compile and link it fine.
---
+buildPBs :: RunConfig -> [FrameElement] -> [PadBlock]
+buildPBs cfg elems@(e:es) =  
+         let max a b = if a < b then b else a
+             header = ImplMember Nothing IMSeqno
+             implmems = header : (sortByAscendingSizes cfg (mapElements elems))
+             biggest_elem_sz = max (implSize cfg header) (maxSize cfg implmems)
+             blockify (l, []) = [PB l biggest_elem_sz]
+             blockify (l,r) = (PB l biggest_elem_sz) : blockify (memPrefix cfg r biggest_elem_sz)
+         in
+             blockify (memPrefix cfg implmems biggest_elem_sz)
+
+implement :: RunConfig -> FullSpecification -> FullImplementation
+implement cfg spec@(Spec emit fs) = Impl emit $ map implFrame fs
+          where implFrame f@(FrameSpecification nm elems) = FrameImpl nm $ concatMap breakPBs (buildPBs cfg elems)
+                breakPBs pb@(PB ms _) = ms
+                

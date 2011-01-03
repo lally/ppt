@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <vector> 
+#include <assert.h>
 FILE *dest;
 
 const int MIN_DELAY_MS = 100;
