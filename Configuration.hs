@@ -32,5 +32,4 @@ implSize c (ImplMember _ t) = memSize c t
             memSize _ IMTime = 16
             memSize _ IMSeqno = 4
             memSize _ (IMPad n) = n
-            memSize _ IMEnd = 0
 

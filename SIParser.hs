@@ -63,22 +63,17 @@ frameSpec = do { SIParser.reserved "frame"
                ; ch '{'
                ; elem <- many element
                ; ch '}'
-               ; return (FrameSpecification name elem)
+               ; return (name,elem)
                }
 
 type Parser t = GenParser Char () t
-
-frameSpecs :: Parser [FrameSpecification]
-frameSpecs = do { fr <- many (frameSpec)
-                ; return fr
-                }
 
 
 commandFile :: GenParser Char () FullSpecification
 commandFile =
             do { emitType <- emitType
-               ; frames <- frameSpecs
-               ; return (Spec emitType frames)
+               ; (name, frame) <- frameSpec
+               ; return (Spec emitType name frame)
                }
                
 
@@ -163,7 +158,7 @@ buildPBs cfg elems@(e:es) =
              blockify (memPrefix cfg implmems biggest_elem_sz)
 
 implement :: RunConfig -> FullSpecification -> FullImplementation
-implement cfg spec@(Spec emit fs) = Impl emit $ map implFrame fs
-          where implFrame f@(FrameSpecification nm elems) = FrameImpl nm $ concatMap breakPBs (buildPBs cfg elems)
+implement cfg spec@(Spec emit nm fs) = Impl emit nm $ implFrame fs
+          where implFrame elems = concatMap breakPBs (buildPBs cfg elems)
                 breakPBs pb@(PB ms _) = ms
                 

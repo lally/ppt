@@ -56,8 +56,8 @@ binaryPath :: RunConfig -> String -> FilePath
 binaryPath (RunConfig cfg _) nm = cfg ++ "generated/" ++ nm
 
 -- specPath returns a folder name for the specified FrameSpecification
-specPath :: RunConfig -> SI.FrameSpecification -> FilePath
-specPath (RunConfig cfg _) spec@(SI.FrameSpecification name elems) =
+specPath :: RunConfig -> SI.FullSpecification -> FilePath
+specPath (RunConfig cfg _) spec@(SI.Spec _ name elems) =
          let hash = concatMap show (SI.specHash spec)
           in cfg ++ "static/" ++ name ++ "/" ++ hash ++ "/"
 
@@ -66,7 +66,7 @@ unknownPaths paths = do filterM ((liftM not) . fileExist) paths
 
 -- create (if needed) the path for 'specPath' for this
 -- config/framespec pair to work.
-makeSpecPath :: RunConfig -> SI.FrameSpecification -> IO ()
+makeSpecPath :: RunConfig -> SI.FullSpecification -> IO ()
 makeSpecPath cfg spec = do
              let backward_path_segs = tails $ tail $reverse $ tail $ split "/" (specPath cfg spec)
              let path_candidates = map (\xs -> "/" ++ (join "/" $ reverse xs) ++ "/") backward_path_segs
