@@ -2,14 +2,14 @@
 module Listener (initialize, generateReader) where
 import StaticInstrumentation
 import LLVM.Core
+import LLVM.Util.Optimize
 import Configuration
 import SIParser (implement)
---import LLVM.Core.FFI
---import LLVM.Core.Util as CU
 import Data.TypeLevel.Num.Reps
 import Data.TypeLevel.Num.Aliases
 import Data.Int
 import Data.Word
+
 --
 -- A wrapper around LLVM initialization, so that we don't have
 -- to force LLVM deps outside of this module.
@@ -19,7 +19,6 @@ initialize = initializeNativeTarget
             
 type MainFunction = Function (Int32 -> Ptr (Ptr Word8) -> IO Int32)
 
---
 -- These will have to be generated from a configure script, probably from
 -- a platform-specific generation script.
 --
@@ -39,43 +38,9 @@ type LibCperror = Function (Ptr Word8 -> IO ())
 type LibCshmat = Function (Int32 -> Ptr Word8 -> Int32 -> IO (Ptr Word8))
 type LibCusleep = Function (Int32 -> IO ())
 
-  {- program:
-     | Block           | Task                                 |
-     |-----------------+--------------------------------------|
-     | default         | check argc                           |
-     | exit            | exit                                 |
-     | args            | fopen the output                     |
-     |                 | malloc & setbuf it                   |
-     |                 | load shmid, shmsz                    |
-     |                 | attach                               |
-     |                 | init startp, endp, curp, last_seqno  |
-     |                 | init read_cnt = 0                    |
-     |                 | init delay = 100.0 (ms)              |
-     |                 | calc low = size/8, hi = size-size/8  |
-     | loop_head       | load curp, seqno                     |
-     |                 | compare seqno                        |
-     |                 | goto either writebuf,determine_sleep |
-     | writebuf        | fprintf the thing                    |
-     |                 | inc read_cnt                         |
-     |                 | jump back to loop_head               |
-     | determine_sleep | if count < low or count > hi         |
-     |                 | > delay = size/2 * delay / count     |
-     |                 | > delay = max(delay, 100)            |
-     |                 | > delay = min(delay, 2000)           |
-     | do_sleep        | read_cnt = 0                         |
-     |                 | sleep (delay)                        |
-
-    note, a second perror() version may be useful, with a phi'd string
-arg.  as we're always flushing, we can die easily; no need for a
-sighup/sigint handler.  perhaps a third 'nsamples' arg?
-
-
-This proc can be stupid-small, and can be nice'd *far* below the one
-it runs against.
-
-
-   -}
-             
+--
+-- Convenience methods
+--
 getArgv :: Word32 -> Value (Ptr (Ptr Word8)) -> CodeGenFunction r (Value (Ptr Word8))
 getArgv n args = do
   pp_arg <- getElementPtr args (n, ())
@@ -83,34 +48,19 @@ getArgv n args = do
   arg <- getElementPtr p_arg (0::Word32, ())
   return arg
 
-s_min :: (IsIntegerOrPointer a, CmpRet a d1, IsFirstClass a) => Value a -> Value a -> CodeGenFunction r (Value a)
+s_min :: (IsIntegerOrPointer a, CmpRet a d1, IsFirstClass a) => 
+      Value a -> Value a -> CodeGenFunction r (Value a)
 s_min a b = do
     t1 <- icmp IntSLE a b
     t2 <- select t1 a b
     return t2
 
-s_max :: (IsIntegerOrPointer a, CmpRet a d1, IsFirstClass a) => Value a -> Value a -> CodeGenFunction r (Value a)
+s_max :: (IsIntegerOrPointer a, CmpRet a d1, IsFirstClass a) => 
+      Value a -> Value a -> CodeGenFunction r (Value a)
 s_max a b = do
     t1 <- icmp IntSGE a b
     t2 <- select t1 a b
     return t2
-
-
-{-
---outputStruct :: Struct (a) ->
-  
-outFrameAtOff :: [FrameElement] -> Value (Ptr Word8) -> (Value (Ptr FILE)) -> CodeGenFunction r (Value Word32)
-outFrameAtOff fr p f = buildOutput fr (reverse fr) (length fr) p f
-              where
-                buildOutput structValue  [] fr n p f = do
-                  
-                buildOutput tail (x:xs) fr n p f = 
-                  case x of
-                       FrameElement FDouble _ = buildOutput ( Double :& tail ) xs n p f
-                       FrameElement FFloat _ = buildOutput (Float :& tail) xs n p f
-                       FrameElement FInt _ = buildOutput (Int :& tail) xs n p f
-
-  -}               
 
 
 buildReaderFun :: String -> Int32 -> CodeGenModule (MainFunction)
@@ -158,36 +108,26 @@ buildReaderFun nm skip = do
   let callPuts format = (
         createNamedFunction ExternalLinkage "main" $ 
         \ argc argv -> do
-          exit <- newBasicBlock
-          load_args <- newBasicBlock
-          try_fopen <- newBasicBlock
-          try_shmat <- newBasicBlock
-          init_vars <- newBasicBlock
-          p_exit <- newBasicBlock
-          sleep_loop_head <- newBasicBlock
-          read_loop_head <- newBasicBlock
-          read_loop_head2 <- newBasicBlock
-          read_loop_head3 <- newBasicBlock
+          exit <- newNamedBasicBlock "exit"
+          load_args <- newNamedBasicBlock "load_args"
+          try_fopen <- newNamedBasicBlock "try_fopen"
+          try_shmat <- newNamedBasicBlock "try_shmat"
+          init_vars <- newNamedBasicBlock "init_vars"
+          p_exit <- newNamedBasicBlock "p_exit"
+          sleep_loop_head <- newNamedBasicBlock "sleep_loop_head"
+          read_loop_head <- newNamedBasicBlock "read_loop_head"
+          read_loop_head2 <- newNamedBasicBlock "read_loop_head2"
+          read_loop_head3 <- newNamedBasicBlock "read_loop_head3"
 
-          failed_read <- newBasicBlock
-          accept_frame <- newBasicBlock
-          finish_frames <- newBasicBlock
-          write_buffer <- newBasicBlock
-          finish_read <- newBasicBlock
-          finish_read2 <- newBasicBlock
-          recalc <- newBasicBlock
-          do_sleep <- newBasicBlock          
+          failed_read <- newNamedBasicBlock "failed_read"
+          accept_frame <- newNamedBasicBlock "accept_frame"
+          finish_frames <- newNamedBasicBlock "finish_frames"
+          write_buffer <- newNamedBasicBlock "write_buffer"
+          finish_read <- newNamedBasicBlock "finish_read"
+          finish_read2 <- newNamedBasicBlock "finish_read2"
+          recalc <- newNamedBasicBlock "recalc"
+          do_sleep <- newNamedBasicBlock "do_sleep"   
           
-          -- alloc our vars
-{-          v_seqno <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
-          v_count <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
-          v_last_seqno <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
-          v_delay <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
-          v_stride <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
-          v_p_cur <- (alloca :: CodeGenFunction r (Value (Ptr (Ptr Int32))))
-          v_p_stride <- (alloca :: CodeGenFunction r (Value (Ptr (Ptr Int32))))
--}
-
           --
           -- First, verify that we have sufficient arguments
           sufficient_args <- icmp IntSGE argc (2::Int32)
@@ -202,7 +142,7 @@ buildReaderFun nm skip = do
           shmid <- call atoi s_shmid
           shmsz <- call atoi s_shmsz
           shmsz' <- icmp IntSGT shmsz (0 :: Int32)
-          condBr shmsz' try_shmat exit -- validate the size as > 0.
+          condBr shmsz' try_fopen exit -- validate the size as > 0.
           
           --
           -- try_fopen: try to fopen the output file.
@@ -361,76 +301,6 @@ buildReaderFun nm skip = do
           _ <- call usleep r_delay
           br sleep_loop_head
 
-          {- 
-          PUT IN LOOP HERE.  Actually, two loops.  An outer one that
-          does the read-sleep cycle, and an inner one that does the
-          actual reading.
-
-          - defineBasicBlock superLoophead
-          - slh_seqno <- seqno
-          - count <- 0
-          - stride_start <- cur
-          - cont_read <- 1
-          - br loophead
-
-          - defineBasicBlock loophead
-
-130         while (cur->seqno > seqno
-131                || (cur->seqno <= min(slh_seqno - size, 0))
-132                || (count == 0 && cur->seqno != last_seqno)) {
-          
-          - read seqno
-          - run the four comparisons, 3 logical ops, and the function call.
-          - if ok -- br acceptFrame
-          - cont_read <- 0
-          - else br writeBuffer
-
-          - defineBasicBlock acceptFrame
-          - increment stride count (for a later fwrite)
-          - increment total count (for rate analysis)
-          - increment ptr
-          - update seqno         
-          - compare to end ptr -- yes? writeBuffer
-          - br loophead
-
-          - I don't need this one.
-            - defineBasicBlock finishFrames
-            - compare total count, 0
-            - branchNZ writeBuffer, finishRead
-          
-          - defineBasicBlock writeBuffer
-          - call fwrite stride_start stride_cnt (4*skip)
-          - stride_start = cur
-          - cmp cont_read 0:finishRead 1:loophead
-          
-          - defineBasicBlock finishRead
-          - remain <- sub count, size
-          - threshold_low <- size << 3
-          - cmp remain, size/8
-          - jl recalc
-          - threshold_up <- threshold_low * 7
-          - cmp remain, 7*size/8
-          - jg recalc
-          - br sleep
-
-          - defineBasicBlock recalc
-          - delay <- size * delay / (count * 2)
-          - delay2 <- min (delay, 2000000)
-          - delay3 <- max (delay2, 100000)
-          - br sleep
-          
-          - defineBasicBlock sleep
-          - call usleep delay3 
-          - br superLoopHead
-          -}
-          
-          {- exit with a call to perror().  Our string is phi:
-           | Block     | Var     |
-           |-----------+---------|
-           | try_fopen | arg1    |
-           | try_shmat | s_shmid | Note: s_shmid isn't *in* try_shmat, but it's the
-           |           |         | string version of shmid.
-           -}
           defineBasicBlock p_exit
           err_str <- phi [(tf_arg1, try_fopen), (s_shmid, try_shmat)]
           call perror err_str
@@ -453,5 +323,6 @@ generateReader cfg s@(Spec _ nm specs) filename = do
       nwords = (fromIntegral (total `div` 4)) :: Int32
   mod <- newNamedModule nm
   defineModule mod (buildReaderFun nm nwords)
+--  optimizeModule 2 mod
   writeBitcodeToFile filename mod
   
