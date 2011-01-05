@@ -128,6 +128,18 @@ buildReaderFun nm skip = do
           recalc <- newNamedBasicBlock "recalc"
           do_sleep <- newNamedBasicBlock "do_sleep"   
           
+          v_stride <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
+          v_count <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
+          v_seqno <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
+          v_last_seqno <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
+          v_delay <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
+          v_cont_read <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
+
+          v_p_cur <- (alloca :: CodeGenFunction r (Value (Ptr (Ptr Int32))))
+          v_p_stride <- (alloca :: CodeGenFunction r (Value (Ptr (Ptr Int32))))
+
+          v_p_perror <-  (alloca :: CodeGenFunction r (Value (Ptr (Ptr Word8))))
+
           --
           -- First, verify that we have sufficient arguments
           sufficient_args <- icmp IntSGE argc (2::Int32)
@@ -139,6 +151,7 @@ buildReaderFun nm skip = do
           defineBasicBlock load_args
           s_shmid <- getArgv 2 argv
           s_shmsz <- getArgv 3 argv
+          store s_shmid v_p_perror
           shmid <- call atoi s_shmid
           shmsz <- call atoi s_shmsz
           shmsz' <- icmp IntSGT shmsz (0 :: Int32)
@@ -149,6 +162,7 @@ buildReaderFun nm skip = do
           --
           defineBasicBlock try_fopen
           tf_arg1  <- getArgv 1 argv 
+          store tf_arg1 v_p_perror
           tf_fopen_arg <- getElementPtr0 (fopen_args :: Global (Array D2 Word8)) (
             0 :: Word32, ())
                        
@@ -171,76 +185,87 @@ buildReaderFun nm skip = do
           -- init_vars: set up loop variables
           --
           defineBasicBlock init_vars
-          init_p_cur <- phi [(array_start, try_shmat)]
-          init_p_stride <- phi [(array_start, try_shmat)]
+
+          store array_start v_p_cur
+          store array_start v_p_stride
+
           array_length <- mul shmsz (valueOf skip)
           array_end <- getElementPtr array_start (array_length, ())
-          init_seqno <- return (valueOf (0 :: Int32))
-          init_last_seqno <- return (valueOf (0 :: Int32))
-          init_delay <- return (valueOf 100000)
-          init_stride <- return (valueOf 0)
+
+          store (valueOf 0) v_seqno 
+          store (valueOf 0) v_last_seqno
+          store (valueOf 100000) v_delay
+          store (valueOf 0) v_stride
           br sleep_loop_head
 
           --
           -- sleep_loop_head
           --
           defineBasicBlock sleep_loop_head
-          slh_stride <- phi [(init_stride, init_vars)]
-          slh_count <- return (valueOf (0 :: Int32))
-          slh_cont_read <- return (valueOf 1) -- whether to continue the read or not
+          store (valueOf 0) v_count 
+          store (valueOf 1) v_cont_read
           
           --
           -- read_loop_head [2,3]
           --
           defineBasicBlock read_loop_head
-          rlh_p_cur <- phi [(init_p_cur, init_vars)]
-          rlh_p_stride <- phi [(init_p_stride, init_vars)]
-          rlh_seqno <- phi [(init_seqno, init_vars)]
-          rlh_count <- phi [(slh_count, sleep_loop_head)]
-          rlh_last_seqno <- phi [(init_last_seqno, init_vars)]
              -- cur->seqno > seqno
-          rlh_read_seqno_p <- getElementPtr rlh_p_cur (0 :: Int32, ())
-          rlh_read_seqno <- load rlh_read_seqno_p
+          rlh_seqno <- load v_seqno
+          rlh_read_seqno_p <- load v_p_cur 
+          rlh_read_seqno <- (load rlh_read_seqno_p :: CodeGenFunction r (Value (Int32)))
           rlh_seqno_gt <- icmp IntUGE rlh_read_seqno rlh_seqno
           condBr rlh_seqno_gt accept_frame read_loop_head2
 
           -- read_loop_head2
             -- or cur->seqno <= min (slh_seqno - size, 0)
           defineBasicBlock read_loop_head2
-          rlh_min_0 <- sub rlh_seqno array_length
-          rlh_p_cur_seqno <- s_min rlh_min_0 (valueOf (0 :: Int32))
-          rlh_seqno_lt <- icmp IntULE rlh_read_seqno rlh_p_cur_seqno
-          condBr rlh_seqno_lt accept_frame read_loop_head3
+          rlh2_seqno <- load v_seqno
+          rlh2_min_0 <- sub rlh2_seqno array_length
+          rlh2_p_cur_seqno <- s_min rlh2_min_0 (valueOf (0 :: Int32))
+          rlh2_read_seqno_p <- load v_p_cur 
+          rlh2_read_seqno <- (load rlh2_read_seqno_p :: CodeGenFunction r (Value (Int32)))
+          rlh2_seqno_lt <- icmp IntULE rlh2_read_seqno rlh2_p_cur_seqno
+          condBr rlh2_seqno_lt accept_frame read_loop_head3
 
           -- read_loop_head3
             -- or count == 0 && cur->seqno != last_seqno
           defineBasicBlock read_loop_head3
-          rlh_count_0 <- icmp IntEQ rlh_count (valueOf (0 ::Int32))
-          rlh_seqno_ne <- icmp IntNE rlh_read_seqno rlh_seqno
+          rlh3_count <- load v_count
+          rlh3_count_0 <- icmp IntEQ rlh3_count (valueOf (0 ::Int32))
+          rlh3_read_seqno_p <- load v_p_cur
+          rlh3_read_seqno <- (load rlh3_read_seqno_p :: CodeGenFunction r (Value (Int32)))
+          rlh3_seqno <- load v_seqno
+          rlh3_seqno_ne <- icmp IntNE rlh3_read_seqno rlh3_seqno
              -- did the underlying value change since last time we checked?
-          rlh_lower_changed <- LLVM.Core.and rlh_count_0 rlh_seqno_ne
-          condBr rlh_lower_changed accept_frame failed_read
+          rlh3_lower_changed <- LLVM.Core.and rlh3_count_0 rlh3_seqno_ne
+          condBr rlh3_lower_changed accept_frame failed_read
 
           --
           -- failed_read
           --
           defineBasicBlock failed_read
-          fr_cont_read <- return (valueOf 0)
+          store (valueOf 0) v_cont_read
           br write_buffer
           
           --
           -- accept_frame
           --
           defineBasicBlock accept_frame
-          af_stride <- add slh_stride (1 :: Int32)
-          af_count <- add rlh_count (1 :: Int32)
-          af_p_seqno <- getElementPtr rlh_p_cur (0 :: Int32, ())
+          af_stride_t <- load v_stride
+          af_stride_t' <- add af_stride_t (1 :: Int32)
+          store af_stride_t' v_stride
+
+          af_count <- load v_count
+          af_count' <- add af_count (1 :: Int32)
+          store af_count' v_count
+
+          
+          af_p_seqno <- load v_p_cur
           af_seqno <- load af_p_seqno
-          af_cur <- getElementPtr rlh_p_cur (skip, ())
-          addPhiInputs rlh_p_cur [(af_cur, accept_frame)]
-          addPhiInputs rlh_seqno [(af_seqno, accept_frame)]
-          addPhiInputs rlh_count [(af_count, accept_frame)]
-          addPhiInputs slh_stride [(af_stride, accept_frame)]
+          store af_seqno v_seqno
+
+          af_cur <- getElementPtr af_p_seqno (skip, ())
+          store af_cur v_p_cur
 
           af_cur_as_int <- (ptrtoint af_cur :: CodeGenFunction r (Value Int32))
           af_end_as_int <- (ptrtoint array_end :: CodeGenFunction r (Value Int32))
@@ -251,15 +276,16 @@ buildReaderFun nm skip = do
           -- write_buffer
           --
           defineBasicBlock write_buffer
-          wb_cont_read <- (phi [(fr_cont_read, failed_read), 
-                               (slh_cont_read, sleep_loop_head)] 
-                               :: CodeGenFunction r (Value Int32))
-          wb_p_stride' <- phi [(rlh_p_cur, read_loop_head)]
+          wb_p_stride' <- load v_p_stride
           wb_p_stride <- bitcast wb_p_stride'
-          _ <- call fwrite wb_p_stride slh_stride (valueOf (skip*4)) tf_outfile
+          wb_stride <- load v_stride
+          _ <- call fwrite wb_p_stride wb_stride (valueOf (skip*4)) tf_outfile
 
-          addPhiInputs rlh_p_stride [(wb_p_stride', write_buffer)]
+          wb_p_cur <- load v_p_cur
+          store wb_p_cur v_p_stride
+          store (valueOf 0) v_stride
 
+          wb_cont_read <- load v_cont_read
           wb_done_reading <- icmp IntEQ wb_cont_read (valueOf (0 :: Int32))
           condBr wb_done_reading finish_read read_loop_head
 
@@ -267,7 +293,7 @@ buildReaderFun nm skip = do
           -- finish_read [2]
           --
           defineBasicBlock finish_read
-          fr_count <- phi [(rlh_count, read_loop_head)]
+          fr_count <- load v_count
           fr_remain <- sub fr_count shmsz
           fr_lower_threshold <- ashr shmsz (valueOf (3 :: Int32))
           fr_too_low <- icmp IntSLE fr_remain fr_lower_threshold
@@ -282,27 +308,27 @@ buildReaderFun nm skip = do
           -- recalc
           --
           defineBasicBlock recalc
-          r_delay <- phi [(init_delay, init_vars)]
-          r_shmsz <- phi [(shmsz, load_args)]
-          r_period_num <- mul r_shmsz r_delay
+          r_delay <- load v_delay
+          r_period_num <- (mul shmsz r_delay :: CodeGenFunction r (Value Int32))
           r_period_den <- (mul (fr_count :: Value Int32) (valueOf (2 :: Int32))
                           :: CodeGenFunction r (Value Int32))
           r_period <- ((udiv (r_period_num :: Value Int32) (r_period_den :: Value Int32))
                        :: CodeGenFunction r (Value Int32))
           r_period_afterlow <- s_min r_period (valueOf (2000000 :: Int32))
           r_period_hi <- s_max r_period_afterlow (valueOf (100000 :: Int32))
-          addPhiInputs r_delay [(r_period_hi, recalc)]
+          store r_period_hi v_delay
           br do_sleep
 
           --
           -- do_sleep
           --
           defineBasicBlock do_sleep
+          ds_delay <- load v_delay
           _ <- call usleep r_delay
           br sleep_loop_head
 
           defineBasicBlock p_exit
-          err_str <- phi [(tf_arg1, try_fopen), (s_shmid, try_shmat)]
+          err_str <- load v_p_perror
           call perror err_str
           ret (1 :: Int32)
           
@@ -323,6 +349,6 @@ generateReader cfg s@(Spec _ nm specs) filename = do
       nwords = (fromIntegral (total `div` 4)) :: Int32
   mod <- newNamedModule nm
   defineModule mod (buildReaderFun nm nwords)
---  optimizeModule 2 mod
+  optimizeModule 2 mod
   writeBitcodeToFile filename mod
   
