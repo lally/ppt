@@ -2,12 +2,12 @@
 libmet
 ------
 
-Lally Singh (lally@acm.org)
+Lally Singh (lally@vt.edu)
 BSD License
 
 PURPOSE
 -------
-libmet provides a minimal raw-data instrumentation library for
+ppt generates a minimal raw-data instrumentation library and reader program for 
 capturing and storing measurements.  It works to minimize intrusion
 into system performance and is intended to work with very high rates
 of data.
@@ -21,6 +21,23 @@ Using some macros, a data structure is filled with measurement data
 and that structure is written to disk.  
 
 INSTALLATION
+------------
+The requirements for building ppt aren't trivial.  Sorry.
+
+You'll need:
+  ghc - The Glorious Glasgow Haskell Compilation System  6.12+
+  llvm - The Low-Level Virtual Machine (tested with version 0.8)
+  and a variety of add-on packages for ghc:
+   - HStringTemplate
+   - llvm (a haskell wrapper API for llvm above) (tested version 0.9.0.1)
+   - Crypto
+   - MissingH
+
+  I strongly recommend starting with the Haskell Platform 
+  (http://hackage.haskell.org/platform/) and then using 
+  'cabal install' to get the add-on packages.
+
+  llvm 
 
 CONSTRAINTS
 -----------
@@ -30,5 +47,22 @@ store and frame-save.
 
 HOW TO USE
 ----------
-Define your frame measurement type, a variable of that type,
-and a frame-buffer for storing raw data.
+Create a file (we use the extension .spec) that looks like this:
+
+--
+emit C
+
+frame beta1 {
+  int count;
+}
+--
+
+While we're just using 'count' here, any number of elements can be in here, with
+the following types: int, float, double, and time.  The first three map to their C
+equivalents, the last (currently) maps to a struct timeval (handy for gettimeofday()).
+Currently, the 'emit C' is required, but we only support C source generation.  
+They will be C++ compatible.
+
+Then call 'ppt generate <thatfile>'.  It will generate (internally, in .ppt/) a
+header file, source code, and a llvm bitcode generator program.
+

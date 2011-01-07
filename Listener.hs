@@ -30,7 +30,7 @@ type FILE = Word8 -- ok, this is easier to read
 type LibCFOpenType = Function (Ptr Word8 -> Ptr Word8 -> IO (Ptr FILE))
 type LibCFCloseType = Function (Ptr FILE -> IO Int32)
 type LibCFWriteType = Function (Ptr Word8 -> Int32 -> Int32 ->Ptr FILE -> IO Int32)
-type LibCSetBufType = Function (Ptr FILE -> Ptr Word8 -> Int32 -> IO ())
+type LibCSetBufType = Function (Ptr FILE -> Ptr Word8 -> IO ())
 type LibCFPrintf = Function (Ptr Word8 -> Ptr Word8 -> VarArgs Word32)
 type LibCFFlush = Function (Ptr Word8 -> IO Int32)
 type LibCatoi = Function (Ptr Word8 -> IO Int32)
@@ -102,18 +102,19 @@ buildReaderFun nm skip = do
   usleep <- (newNamedFunction ExternalLinkage "usleep"
              :: CodeGenModule(LibCusleep))
 
-  pattern <- createStringNul "Loading file %s\n" 
+  pattern <- createStringNul "Writing %d entries\n" 
   fopen_args <- createStringNul "a"
-             
+  
+
   let callPuts format = (
         createNamedFunction ExternalLinkage "main" $ 
         \ argc argv -> do
-          exit <- newNamedBasicBlock "exit"
+          {- NOTE: For some unearthly reason, these have to be in the
+              exact order of the 'defineBasicBlock' calls below.  -}
           load_args <- newNamedBasicBlock "load_args"
           try_fopen <- newNamedBasicBlock "try_fopen"
           try_shmat <- newNamedBasicBlock "try_shmat"
           init_vars <- newNamedBasicBlock "init_vars"
-          p_exit <- newNamedBasicBlock "p_exit"
           sleep_loop_head <- newNamedBasicBlock "sleep_loop_head"
           read_loop_head <- newNamedBasicBlock "read_loop_head"
           read_loop_head2 <- newNamedBasicBlock "read_loop_head2"
@@ -121,28 +122,33 @@ buildReaderFun nm skip = do
 
           failed_read <- newNamedBasicBlock "failed_read"
           accept_frame <- newNamedBasicBlock "accept_frame"
-          finish_frames <- newNamedBasicBlock "finish_frames"
+          back_to_front <- newNamedBasicBlock "back_to_front"
           write_buffer <- newNamedBasicBlock "write_buffer"
           finish_read <- newNamedBasicBlock "finish_read"
           finish_read2 <- newNamedBasicBlock "finish_read2"
           recalc <- newNamedBasicBlock "recalc"
+          recalc2 <- newNamedBasicBlock "recalc2"
+          recalc3 <- newNamedBasicBlock "recalc3"
           do_sleep <- newNamedBasicBlock "do_sleep"   
+          p_exit <- newNamedBasicBlock "p_exit"
+          exit <- newNamedBasicBlock "exit"
           
+          let printf_pattern =(castVarArgs printf 
+                      :: Function (Ptr Word8 -> Int32 -> IO Word32))
+
           v_stride <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
           v_count <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
           v_seqno <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
           v_last_seqno <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
           v_delay <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
           v_cont_read <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
-
           v_p_cur <- (alloca :: CodeGenFunction r (Value (Ptr (Ptr Int32))))
           v_p_stride <- (alloca :: CodeGenFunction r (Value (Ptr (Ptr Int32))))
-
           v_p_perror <-  (alloca :: CodeGenFunction r (Value (Ptr (Ptr Word8))))
 
           --
           -- First, verify that we have sufficient arguments
-          sufficient_args <- icmp IntSGE argc (2::Int32)
+          sufficient_args <- icmp IntSGE argc (3::Int32)
           condBr sufficient_args load_args exit
           
           --
@@ -176,6 +182,7 @@ buildReaderFun nm skip = do
           --
           defineBasicBlock try_shmat
           nullptr_word8 <- inttoptr (valueOf (0 :: Int32))
+          _ <- call setbuf tf_outfile nullptr_word8
           array_start_b <- call shmat shmid nullptr_word8 (valueOf 0o400)
           array_start <- bitcast array_start_b -- Ptr Word8 ->  Ptr Int32
           ts_shmat_ok <- icmp IntNE array_start_b (nullptr_word8 :: Value (Ptr Word8))
@@ -185,13 +192,10 @@ buildReaderFun nm skip = do
           -- init_vars: set up loop variables
           --
           defineBasicBlock init_vars
-
           store array_start v_p_cur
           store array_start v_p_stride
-
           array_length <- mul shmsz (valueOf skip)
           array_end <- getElementPtr array_start (array_length, ())
-
           store (valueOf 0) v_seqno 
           store (valueOf 0) v_last_seqno
           store (valueOf 100000) v_delay
@@ -204,6 +208,7 @@ buildReaderFun nm skip = do
           defineBasicBlock sleep_loop_head
           store (valueOf 0) v_count 
           store (valueOf 1) v_cont_read
+          br read_loop_head
           
           --
           -- read_loop_head [2,3]
@@ -217,15 +222,18 @@ buildReaderFun nm skip = do
           condBr rlh_seqno_gt accept_frame read_loop_head2
 
           -- read_loop_head2
-            -- or cur->seqno <= min (slh_seqno - size, 0)
+            -- or cur->seqno <= min (seqno - size, 0)
           defineBasicBlock read_loop_head2
           rlh2_seqno <- load v_seqno
           rlh2_min_0 <- sub rlh2_seqno array_length
-          rlh2_p_cur_seqno <- s_min rlh2_min_0 (valueOf (0 :: Int32))
+--          rlh2_p_cur_seqno <- s_min rlh2_min_0 (valueOf (0 :: Int32))
           rlh2_read_seqno_p <- load v_p_cur 
           rlh2_read_seqno <- (load rlh2_read_seqno_p :: CodeGenFunction r (Value (Int32)))
-          rlh2_seqno_lt <- icmp IntULE rlh2_read_seqno rlh2_p_cur_seqno
-          condBr rlh2_seqno_lt accept_frame read_loop_head3
+          rlh2_min_fp <- (sitofp rlh2_min_0 :: CodeGenFunction r (Value Double))
+          rlh2_seqno_fp <- (uitofp rlh2_read_seqno :: CodeGenFunction r (Value Double))
+--          rlh2_seqno_lt <- icmp IntSLE rlh2_read_seqno rlh2_min_0 --rlh2_p_cur_seqno
+          rlh2_seqno_lt <- fcmp FPOLE rlh2_seqno_fp rlh2_min_fp
+          condBr rlh2_seqno_lt accept_frame read_loop_head3 
 
           -- read_loop_head3
             -- or count == 0 && cur->seqno != last_seqno
@@ -234,7 +242,7 @@ buildReaderFun nm skip = do
           rlh3_count_0 <- icmp IntEQ rlh3_count (valueOf (0 ::Int32))
           rlh3_read_seqno_p <- load v_p_cur
           rlh3_read_seqno <- (load rlh3_read_seqno_p :: CodeGenFunction r (Value (Int32)))
-          rlh3_seqno <- load v_seqno
+          rlh3_seqno <- load v_last_seqno
           rlh3_seqno_ne <- icmp IntNE rlh3_read_seqno rlh3_seqno
              -- did the underlying value change since last time we checked?
           rlh3_lower_changed <- LLVM.Core.and rlh3_count_0 rlh3_seqno_ne
@@ -270,7 +278,13 @@ buildReaderFun nm skip = do
           af_cur_as_int <- (ptrtoint af_cur :: CodeGenFunction r (Value Int32))
           af_end_as_int <- (ptrtoint array_end :: CodeGenFunction r (Value Int32))
           af_cur_at_end <- icmp IntEQ af_cur_as_int af_end_as_int
-          condBr af_cur_at_end write_buffer read_loop_head
+          condBr af_cur_at_end back_to_front read_loop_head
+
+          --
+          -- back_to_front
+          --
+          store array_start v_p_cur
+          br write_buffer
 
           -- 
           -- write_buffer
@@ -280,6 +294,9 @@ buildReaderFun nm skip = do
           wb_p_stride <- bitcast wb_p_stride'
           wb_stride <- load v_stride
           _ <- call fwrite wb_p_stride wb_stride (valueOf (skip*4)) tf_outfile
+          wb_pattern <- getElementPtr0 (pattern :: Global (Array D20 Word8)) (
+            0 :: Word32, ())
+          _ <- call printf_pattern wb_pattern wb_stride
 
           wb_p_cur <- load v_p_cur
           store wb_p_cur v_p_stride
@@ -305,18 +322,30 @@ buildReaderFun nm skip = do
           condBr fr_too_high recalc do_sleep
 
           --
-          -- recalc
+          -- recalc [2,3]
           --
           defineBasicBlock recalc
-          r_delay <- load v_delay
-          r_period_num <- (mul shmsz r_delay :: CodeGenFunction r (Value Int32))
-          r_period_den <- (mul (fr_count :: Value Int32) (valueOf (2 :: Int32))
+          r_count <- load v_count
+          r_none_read <- icmp IntEQ r_count (valueOf (0 :: Int32))
+          condBr r_none_read recalc2 recalc3
+
+          -- we didn't read anything. sleep for 2 secs.
+          defineBasicBlock recalc2
+          store (valueOf (2000000 :: Int32)) v_delay
+          br do_sleep
+
+          -- we read something, but we're out of the comfort zone.
+          defineBasicBlock recalc3
+          r3_delay <- load v_delay
+          r3_count <- load v_count
+          r3_period_num <- (mul shmsz r3_delay :: CodeGenFunction r (Value Int32))
+          r3_period_den <- (mul (r3_count :: Value Int32) (valueOf (2 :: Int32))
                           :: CodeGenFunction r (Value Int32))
-          r_period <- ((udiv (r_period_num :: Value Int32) (r_period_den :: Value Int32))
+          r3_period <- ((udiv (r3_period_num :: Value Int32) (r3_period_den :: Value Int32))
                        :: CodeGenFunction r (Value Int32))
-          r_period_afterlow <- s_min r_period (valueOf (2000000 :: Int32))
-          r_period_hi <- s_max r_period_afterlow (valueOf (100000 :: Int32))
-          store r_period_hi v_delay
+          r3_period_afterlow <- s_min r3_period (valueOf (2000000 :: Int32))
+          r3_period_hi <- s_max r3_period_afterlow (valueOf (100000 :: Int32))
+          store r3_period_hi v_delay
           br do_sleep
 
           --
@@ -324,9 +353,13 @@ buildReaderFun nm skip = do
           --
           defineBasicBlock do_sleep
           ds_delay <- load v_delay
-          _ <- call usleep r_delay
-          br sleep_loop_head
+          _ <- call usleep ds_delay
+          ds_should_die <- icmp IntEQ ds_delay (valueOf (0 :: Int32))
+          condBr ds_should_die exit sleep_loop_head
 
+          --
+          -- p_exit
+          --
           defineBasicBlock p_exit
           err_str <- load v_p_perror
           call perror err_str
@@ -349,6 +382,6 @@ generateReader cfg s@(Spec _ nm specs) filename = do
       nwords = (fromIntegral (total `div` 4)) :: Int32
   mod <- newNamedModule nm
   defineModule mod (buildReaderFun nm nwords)
-  optimizeModule 2 mod
+--  optimizeModule 2 mod
   writeBitcodeToFile filename mod
   

@@ -23,8 +23,8 @@ memberName :: ImplMember -> String
 memberName (ImplMember (Just (FrameElement _ nm)) _) = nm
 
 typeBody :: RunConfig -> ImplMember -> Int -> String
-typeBody cfg (ImplMember Nothing IMSeqno) _ = "int ppt_seqno"
-typeBody cfg (ImplMember Nothing (IMPad n)) i= "unsigned char  ppt_seqno" ++ (show i) ++ "["++(show n) ++"]"
+typeBody cfg (ImplMember Nothing IMSeqno) _ = "/* ppt-private */ int ppt_seqno"
+typeBody cfg (ImplMember Nothing (IMPad n)) i= "/* ppt-private */ unsigned char  ppt_pad" ++ (show i) ++ "["++(show n) ++"]"
 typeBody cfg (ImplMember (Just fe@(FrameElement FDouble nm)) IMDouble) _ = "double " ++ nm
 typeBody cfg (ImplMember (Just fe@(FrameElement FFloat nm)) IMFloat) _ = "float " ++ nm
 typeBody cfg (ImplMember (Just fe@(FrameElement FInt nm)) IMInt) _ = "int " ++ nm
@@ -47,16 +47,22 @@ makeHeader cfg impl@(Impl _ nm fs) fname =
                     "#include <sys/time.h>",
                     "",
                     "typedef struct ppt_tag_struct_$nm$ {",
-                    "  $names; separator=\";\n  \"$",
+                    "  $names; separator=\";\n  \"$;",
                     "} pptframe_$nm$_t __attribute__ ((packed));",
                     "",
                     "#define $macros; separator=\"\n#define \"$",
                     "",
-                    "extern ppt_frame_$nm$_t _ppt_frame_$nm$;",
+                    "extern pptframe_$nm$_t _ppt_frame_$nm$;",
                     "extern int _ppt_hmem_$nm$;",
                     "extern int _ppt_hsize_$nm$;",
                     "extern int _ppt_version_$nm$[16];",
+                    "#ifdef _cplusplus",
+                    "extern \"C\" {",
+                    "#endif",
                     "void ppt_write_$nm$_frame();",
+                    "#ifdef _cplusplus",
+                    "}",
+                    "#endif",
                     "#endif /* #ifndef $sym$ */",
                     ""]
              t = newSTMP tstr :: StringTemplate String
@@ -72,22 +78,24 @@ makeHeader cfg impl@(Impl _ nm fs) fname =
 
 makeSource :: RunConfig -> FullImplementation -> String -> String
 makeSource c impl@(Impl _ nm fs) fname = -- undefined
-           let tstr = unlines ["#include \"$fname$\"",
+           let tstr = unlines ["#include \"$fname$.h\"",
                                "",
                                "#include <sys/types.h>",
                                "#include <sys/ipc.h>",
                                "#include <sys/shm.h>",
                                "",
                                "static pptframe_$nm$_t *s_start, *s_end, *s_cur;",
+                               "pptframe_$nm$_t _ppt_frame_$nm$;",
+                               "int _ppt_hmem_$nm$;",
+                               "int _ppt_hsize_$nm$;",
+                               "int _ppt_version_$nm$[16];",
                                "",
                                "void ppt_write_$nm$_frame() {",
                                "  if (_ppt_hmem_$nm$) {",
                                "      if (s_start) {",
-                               "          $assigns; separator=\";\n          \"$",
-                               "          s_cur->a = _ppt_frame_$nm$.a;",
-                               "          ...;",
+                               "          $assigns; separator=\";\n          \"$;",
                                "          __sync_synchronize(); // gcc builtin",
-                               "          s_cur->ppt_seqno = _ppt_frame_$nm$.seqno++;",
+                               "          s_cur->ppt_seqno = _ppt_frame_$nm$.ppt_seqno++;",
                                "          s_cur++;",
                                "          if (s_cur == s_end) { s_cur = s_start; }",
                                "      } else {",
@@ -95,22 +103,23 @@ makeSource c impl@(Impl _ nm fs) fname = -- undefined
                                "          // determine the size of the shared memory segment, and attach it.",
                                "          struct shmid_ds buf;",
                                "          if (shmctl(h, IPC_STAT, &buf) != 0",
-                               "              || ((s_start = (ppt_frame_$nm$_t *) shmat(h, 0, 0600))) == (ppt_frame_$nm$_t *) -1) {",
+                               "              || ((s_start = (pptframe_$nm$_t *) shmat(h, 0, 0600))) == (pptframe_$nm$_t *) -1) {",
                                "              _ppt_hmem_$nm$ = 0;",
                                "              return;  // abort attach.",
                                "          }",
-                               "          s_end = s_start + (buf.shm_segsz / sizeof(struct ppt_frame_$nm$_t));",
+                               "          s_end = s_start + (buf.shm_segsz / sizeof(pptframe_$nm$_t));",
                                "          s_cur = s_start;",
                                "      }",
                                "  } else if (s_start) {",
                                "      shmdt(s_start);",
                                "      s_start = 0;",
                                "  }",
-                               "}"]
+                               "}",
+                               ""]
                t = newSTMP tstr ::StringTemplate String
                mems = map memberName $ filter hasFrameElement fs
                assigns = map (\e -> "s_cur->" ++ e ++ " = _ppt_frame_" ++ nm ++ "." ++ e) mems
-           in render $ setAttribute "nm" nm $ setAttribute "assigns" assigns t
+           in render $ setAttribute "fname" fname $ setAttribute "nm" nm $ setAttribute "assigns" assigns t
 
 emitC :: RunConfig -> FullImplementation -> String -> (String, String)
 emitC cfg impl fname = (makeHeader cfg impl fname, makeSource cfg impl fname)

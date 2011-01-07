@@ -15,19 +15,23 @@ import System (getArgs)
  -}
 
 showHelp = do
-  putStrLn "pt help -- This message"
-  putStrLn "pt generate [options] <filename> -- Generate static instrumentation"
-  putStrLn "   <filename> - The instrumentation spec"
-  putStrLn "   options: "
-  putStrLn "     -o name --- file base name"
-
+  putStrLn "ppt help -- This message"
+  putStrLn "ppt generate [options] <filename> -- Generate static instrumentation"
+  putStrLn "    <filename> - The instrumentation spec"
+  putStrLn "    options: "
+  putStrLn "      -o name --- file base name"
+  putStrLn "ppt retrieve <filename> -- Extract generated instrumentation into current directory."
 
 runCommand :: [String] -> RunConfig -> IO ()
 runCommand args cfg = do
   if (length args) == 0 then showHelp else 
     case head args of
+      "gen" -> Gen.generate (tail args) cfg
       "generate" -> Gen.generate (tail args) cfg
+      "?" -> showHelp
       "help" -> showHelp
+      "ret" -> Gen.checkout (tail args) cfg
+      "retrieve" -> Gen.checkout (tail args) cfg
       otherwise -> showHelp
   
 main = do

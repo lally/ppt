@@ -2,6 +2,8 @@
 #include <libelf.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 #include <string>
 #include <sstream>
 #include <iostream>
@@ -137,6 +139,7 @@ int attach (int argc, char **argv) {
 	GElf_Shdr shdr;
 	Elf_Data  *data;
 	int cur_value = -1;
+	int count = -1;
 
 	if (elfObservedKind != ELF_K_ELF) {
 		printf("Wrong type of object: %s\n", s_elfkinds[elfObservedKind]);
@@ -156,7 +159,7 @@ int attach (int argc, char **argv) {
 	}
 	
 	data = elf_getdata(scn, NULL);
-	int count = shdr.sh_size / shdr.sh_entsize;
+	count = shdr.sh_size / shdr.sh_entsize;
 	for (int i=0; i<count; ++i) {
 		GElf_Sym sym;
 		gelf_getsym(data, i, &sym);
