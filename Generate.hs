@@ -40,22 +40,29 @@ doGenerate spec@(Spec emit _ frames) basefname cfg = do
           let dstpath = specPath cfg spec
               header_name = (basefname ++ ".h")
               source_name = (basefname ++ ".c")
-              (header, source) = 
+              converter_name = (basefname ++ "_convert.c")
+              (header, source, converter) = 
                 emitC cfg impl basefname
           makeSpecPath cfg spec
           writeFile (dstpath ++ header_name) header
           writeFile (dstpath ++ source_name) source
+          writeFile (dstpath ++ converter_name) converter
           L.generateReader cfg spec (dstpath ++ basefname ++ ".ll")
     
+        {- If it isn't obvious, this is just a stub -}
         LangCpp -> do
           let dstpath = specPath cfg spec
-              header_name = basefname ++ ".h"
-              source_name = basefname ++ ".cpp"
-              (header, source) = emitC cfg impl basefname
+              header_name = (basefname ++ ".h")
+              source_name = (basefname ++ ".cpp")
+              converter_name = (basefname ++ "_convert.cpp")
+              (header, source, converter) = 
+                emitC cfg impl basefname {- <--- Obvious? -}
+          putStrLn "Note, this is unsupported, and 'checkout' will not work correctly."
           makeSpecPath cfg spec
-          writeFile header_name header
-          writeFile source_name source
-          L.generateReader cfg spec (basefname ++ ".ll")
+          writeFile (dstpath ++ header_name) header
+          writeFile (dstpath ++ source_name) source
+          writeFile (dstpath ++ converter_name) converter
+          L.generateReader cfg spec (dstpath ++ basefname ++ ".ll")
 
 --  putStrLn (show result) 
   
@@ -89,9 +96,10 @@ checkout files cfg = do
             case result of
                  Left err -> putStrLn ("ERROR: " ++ (show err))
                  Right spec -> do
+                 {- Note that we're assuming C here. -}
                   let dstpath = specPath cfg spec        
                       basefilename = takeWhile (/= '.') file
                   mapM_ (\suff -> do
                                let n = (basefilename ++ suff)  
                                putStrLn ("Copied " ++ n)
-                               copyFile (dstpath ++ n) n) [".h", ".c", ".ll"]) files
+                               copyFile (dstpath ++ n) n) [".h", ".c", ".ll", "_convert.c"]) files

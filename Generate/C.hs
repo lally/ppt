@@ -121,5 +121,73 @@ makeSource c impl@(Impl _ nm fs) fname = -- undefined
                assigns = map (\e -> "s_cur->" ++ e ++ " = _ppt_frame_" ++ nm ++ "." ++ e) mems
            in render $ setAttribute "fname" fname $ setAttribute "nm" nm $ setAttribute "assigns" assigns t
 
-emitC :: RunConfig -> FullImplementation -> String -> (String, String)
-emitC cfg impl fname = (makeHeader cfg impl fname, makeSource cfg impl fname)
+isPartOfOutput :: ImplMember -> Bool
+isPartOfOutput (ImplMember (Just _) _) = True
+isPartOfOutput (ImplMember Nothing IMSeqno) = True
+isPartOfOutput (ImplMember Nothing _) = False
+
+memberNames :: ImplMember -> [String]
+memberNames (ImplMember (Just (FrameElement _ nm)) IMTime) = [nm ++ ".tv_sec", nm ++ "tv_usec"]
+memberNames (ImplMember (Just (FrameElement _ nm)) _) = [nm]
+memberNames (ImplMember Nothing IMSeqno) = ["ppt_seqno"]
+
+memberFormat :: ImplMember -> [String]
+memberFormat (ImplMember _ IMDouble) = ["%10.8f"]
+memberFormat (ImplMember _ IMFloat)  = ["%10.8f"]
+memberFormat (ImplMember _ IMInt) = ["%d"]
+memberFormat (ImplMember _ IMSeqno) = ["%d"]
+memberFormat (ImplMember _ IMTime) = ["%d", "%d"]
+
+
+
+makeConverter :: RunConfig -> FullImplementation -> String -> String
+makeConverter c impl@(Impl _ nm fs) fname = 
+           let tstr = unlines ["#include <stdio.h>",
+                               "#include <stdlib.h>",
+                               "",
+                               "typedef struct tag_pptframe_$nm$_t {",
+                               "  $elements; separator=\";\n  \"$;",
+                               "} pptframe_$nm$_t __attribute__ ((packed));",
+                               "",
+                               "",
+                               "int main(int args, char ** argv) {",
+                               "    if (args <3) {",
+                               "        printf(\"usage: %s infile outfile\\\\n\", argv[0]);",
+                               "        puts  (\"  to print out raw $nm$ entries to tab-separated text.\");",
+                               "        exit(1);",
+                               "    }",
+                               "",
+                               "    FILE *in, *out;",
+                               "    if (!(in = fopen(argv[1], \"r\"))) {",
+                               "        puts(argv[1]);",
+                               "        exit(1);",
+                               "    }",
+                               "",
+                               "    if (!(out = fopen(argv[2], \"w+\"))) {",
+                               "        puts(argv[2]);",
+                               "        exit(1);",
+                               "    }",
+                               "",
+                               "    fprintf(out, \"$names; separator=\"\\\\t\"$\\\\n\");",
+                               "",
+                               "    while (1) {",
+                               "        pptframe_$nm$_t buf;",
+                               "        if (!fread(&buf, sizeof(pptframe_$nm$_t), 1, in)) {",
+                               "            fclose(out);",
+                               "            exit(0);",
+                               "        }",
+                               "        fprintf(out, \"$formats; separator=\"\\\\t\"$\\\\n\", buf.$names; separator=\", buf.\"$);",
+                               "    }",
+                               "",
+                               "    return 0;",
+                               "}",
+                               ""]
+               t = newSTMP tstr ::StringTemplate String
+               mems =  filter isPartOfOutput fs
+               elements = (map (\(a,b) -> typeBody c a b) $ zip fs [1..]) :: [String]
+               names =  concatMap memberNames mems
+               formats = concatMap memberFormat mems
+           in render $ setAttribute "formats" formats $ setAttribute "names" names $ setAttribute "nm" nm $ setAttribute "elements" elements t
+
+emitC :: RunConfig -> FullImplementation -> String -> (String, String, String)
+emitC cfg impl fname = (makeHeader cfg impl fname, makeSource cfg impl fname, makeConverter cfg impl fname)
