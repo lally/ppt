@@ -140,6 +140,7 @@ buildReaderFun nm skip = do
           v_count <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
           v_seqno <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
           v_last_seqno <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
+          v_last_cur_seqno <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
           v_delay <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
           v_cont_read <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
           v_p_cur <- (alloca :: CodeGenFunction r (Value (Ptr (Ptr Int32))))
@@ -197,6 +198,7 @@ buildReaderFun nm skip = do
           array_length <- mul shmsz (valueOf skip)
           array_end <- getElementPtr array_start (array_length, ())
           store (valueOf 0) v_seqno 
+          store (valueOf 0) v_last_cur_seqno
           store (valueOf 0) v_last_seqno
           store (valueOf 100000) v_delay
           store (valueOf 0) v_stride
@@ -208,6 +210,8 @@ buildReaderFun nm skip = do
           defineBasicBlock sleep_loop_head
           store (valueOf 0) v_count 
           store (valueOf 1) v_cont_read
+--          slh_last_seqno <- load v_last_seqno
+--          store slh_last_seqno v_seqno
           br read_loop_head
           
           --
@@ -228,21 +232,23 @@ buildReaderFun nm skip = do
           rlh2_min_0 <- sub rlh2_seqno array_length
 --          rlh2_p_cur_seqno <- s_min rlh2_min_0 (valueOf (0 :: Int32))
           rlh2_read_seqno_p <- load v_p_cur 
-          rlh2_read_seqno <- (load rlh2_read_seqno_p :: CodeGenFunction r (Value (Int32)))
+          rlh2_read_seqno <- (load rlh2_read_seqno_p 
+                              :: CodeGenFunction r (Value (Int32)))
           rlh2_min_fp <- (sitofp rlh2_min_0 :: CodeGenFunction r (Value Double))
           rlh2_seqno_fp <- (uitofp rlh2_read_seqno :: CodeGenFunction r (Value Double))
 --          rlh2_seqno_lt <- icmp IntSLE rlh2_read_seqno rlh2_min_0 --rlh2_p_cur_seqno
-          rlh2_seqno_lt <- fcmp FPOLE rlh2_seqno_fp rlh2_min_fp
+          rlh2_seqno_lt <- fcmp FPOLT rlh2_seqno_fp rlh2_min_fp
           condBr rlh2_seqno_lt accept_frame read_loop_head3 
 
           -- read_loop_head3
-            -- or count == 0 && cur->seqno != last_seqno
+            -- or count == 0 && cur->seqno != last_cur_seqno
           defineBasicBlock read_loop_head3
           rlh3_count <- load v_count
           rlh3_count_0 <- icmp IntEQ rlh3_count (valueOf (0 ::Int32))
           rlh3_read_seqno_p <- load v_p_cur
-          rlh3_read_seqno <- (load rlh3_read_seqno_p :: CodeGenFunction r (Value (Int32)))
-          rlh3_seqno <- load v_last_seqno
+          rlh3_read_seqno <- (load rlh3_read_seqno_p 
+                             :: CodeGenFunction r (Value (Int32)))
+          rlh3_seqno <- load v_last_cur_seqno
           rlh3_seqno_ne <- icmp IntNE rlh3_read_seqno rlh3_seqno
              -- did the underlying value change since last time we checked?
           rlh3_lower_changed <- LLVM.Core.and rlh3_count_0 rlh3_seqno_ne
@@ -310,6 +316,11 @@ buildReaderFun nm skip = do
           -- finish_read [2]
           --
           defineBasicBlock finish_read
+          fr_p_cur <- load v_p_cur
+          fr_p_last_cur_seqno <- load fr_p_cur
+          store fr_p_last_cur_seqno v_last_cur_seqno
+          fr_seqno <- load v_seqno
+          store fr_seqno v_last_seqno
           fr_count <- load v_count
           fr_remain <- sub fr_count shmsz
           fr_lower_threshold <- ashr shmsz (valueOf (3 :: Int32))
