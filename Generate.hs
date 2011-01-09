@@ -42,7 +42,7 @@ doGenerate spec@(Spec emit _ frames) basefname cfg = do
               source_name = (basefname ++ ".c")
               converter_name = (basefname ++ "_convert.c")
               (header, source, converter) = 
-                emitC cfg impl basefname
+                emitC cfg spec impl basefname
           makeSpecPath cfg spec
           writeFile (dstpath ++ header_name) header
           writeFile (dstpath ++ source_name) source
@@ -56,7 +56,7 @@ doGenerate spec@(Spec emit _ frames) basefname cfg = do
               source_name = (basefname ++ ".cpp")
               converter_name = (basefname ++ "_convert.cpp")
               (header, source, converter) = 
-                emitC cfg impl basefname {- <--- Obvious? -}
+                emitC cfg spec impl basefname {- <--- Obvious? -}
           putStrLn "Note, this is unsupported, and 'checkout' will not work correctly."
           makeSpecPath cfg spec
           writeFile (dstpath ++ header_name) header

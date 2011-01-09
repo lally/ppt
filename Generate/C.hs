@@ -12,7 +12,7 @@ import StaticInstrumentation
 import Data.Char (toUpper)
 import Data.List.Utils (replace)
 import Text.StringTemplate
-
+import Text.Printf (printf)
 
 hasFrameElement :: ImplMember -> Bool
 hasFrameElement (ImplMember (Just _) _) = True
@@ -55,7 +55,7 @@ makeHeader cfg impl@(Impl _ nm fs) fname =
                     "extern pptframe_$nm$_t _ppt_frame_$nm$;",
                     "extern int _ppt_hmem_$nm$;",
                     "extern int _ppt_hsize_$nm$;",
-                    "extern int _ppt_version_$nm$[16];",
+                    "extern unsigned char _ppt_version_$nm$[16];",
                     "#ifdef _cplusplus",
                     "extern \"C\" {",
                     "#endif",
@@ -76,8 +76,8 @@ makeHeader cfg impl@(Impl _ nm fs) fname =
           in render fullTempl
              
 
-makeSource :: RunConfig -> FullImplementation -> String -> String
-makeSource c impl@(Impl _ nm fs) fname = -- undefined
+makeSource :: RunConfig -> FullSpecification -> FullImplementation -> String -> String
+makeSource c spec impl@(Impl _ nm fs) fname = -- undefined
            let tstr = unlines ["#include \"$fname$.h\"",
                                "",
                                "#include <sys/types.h>",
@@ -88,7 +88,7 @@ makeSource c impl@(Impl _ nm fs) fname = -- undefined
                                "pptframe_$nm$_t _ppt_frame_$nm$;",
                                "int _ppt_hmem_$nm$;",
                                "int _ppt_hsize_$nm$;",
-                               "int _ppt_version_$nm$[16];",
+                               "unsigned char _ppt_version_$nm$[16] = {$vbytes; separator=\", \"$};",
                                "",
                                "void ppt_write_$nm$_frame() {",
                                "  if (_ppt_hmem_$nm$) {",
@@ -118,8 +118,9 @@ makeSource c impl@(Impl _ nm fs) fname = -- undefined
                                ""]
                t = newSTMP tstr ::StringTemplate String
                mems = map memberName $ filter hasFrameElement fs
+               ver_bytes = map show $ specHash spec
                assigns = map (\e -> "s_cur->" ++ e ++ " = _ppt_frame_" ++ nm ++ "." ++ e) mems
-           in render $ setAttribute "fname" fname $ setAttribute "nm" nm $ setAttribute "assigns" assigns t
+           in render $ setAttribute "vbytes" ver_bytes $ setAttribute "fname" fname $ setAttribute "nm" nm $ setAttribute "assigns" assigns t
 
 isPartOfOutput :: ImplMember -> Bool
 isPartOfOutput (ImplMember (Just _) _) = True
@@ -189,5 +190,5 @@ makeConverter c impl@(Impl _ nm fs) fname =
                formats = concatMap memberFormat mems
            in render $ setAttribute "formats" formats $ setAttribute "names" names $ setAttribute "nm" nm $ setAttribute "elements" elements t
 
-emitC :: RunConfig -> FullImplementation -> String -> (String, String, String)
-emitC cfg impl fname = (makeHeader cfg impl fname, makeSource cfg impl fname, makeConverter cfg impl fname)
+emitC :: RunConfig -> FullSpecification -> FullImplementation -> String -> (String, String, String)
+emitC cfg spec impl fname = (makeHeader cfg impl fname, makeSource cfg spec impl fname, makeConverter cfg impl fname)
