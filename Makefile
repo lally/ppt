@@ -1,5 +1,5 @@
 
-CXXFLAGS=-I/usr/local/include -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS
+CXXFLAGS=-I/usr/local/include -I. -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -DPLAT_LINUX
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -g -c $< -o $@
@@ -34,6 +34,9 @@ test_attach: agent/test/test_attach.o
 
 dummy_client: agent/test/dummy_client.o
 	g++ -g -o $@ $^
+
+ppt-agent: agent/driver.o agent/attach.o agent/linux/linux-agent.o 
+	g++ -g -o $@ $^ -lelf
 
 ppt: Configuration.hs Generate.hs Generate/C.hs Listener.hs Main.hs SIParser.hs StaticInstrumentation.hs Storage.hs
 	ghc -o ppt --make Main.hs

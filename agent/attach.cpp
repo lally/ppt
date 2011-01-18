@@ -8,29 +8,42 @@
 #include <sstream>
 #include <iostream>
 #include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 #include <sys/stat.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <utility>
 #include <algorithm>
 #include <map>
 #include <list>
+#include "platform-agent.h" 
+
 /*
   attach  -- attach instrumentation to a process
 
-  arguments (one-char for compat with stick getopt(3c)):
+  arguments (one-char for compat with stock non-gnu getopt(3c)):
     -p pid -- pid of process to attach
-	-s sym -- symbol of shared memory
-	-S sym -v value -- symbol containing version of instrumentation,
-	                   and the value it should be (aborts if invalid)
-	-i logger -- instrumentation logger to run
-	-# sz -- size of shared memory, in bytes to create
-	-V -- be verbose
-	-D -- debugging traces.
+    -s sym -- symbol of shared memory
+    -S sym -v value -- symbol containing version of instrumentation,
+                       and the value it should be (aborts if invalid)
+    -i logger -- instrumentation logger to run
+    -# sz -- size of shared memory, in bytes to create
+    -V -- be verbose
+    -D -- debugging traces.
 
   attach will run until it receives a signal, or until either the pid
-  or logger die.  In any case, it'll nuke hte shared memory symbol,
+  or logger die.  In any case, it'll nuke the shared memory symbol,
   (optionally) kill the logger, and (optionally) wait for the shared
-  memory to be unused before nuking it.
+  memory to be unused before nuking it. 'logger' can be a quoted
+  string with additional front arguments.
+
+  Sadly, the gnu libelf doesn't seem to come with very much
+  documentation.  The Solaris libelf (and gelf), however, do.  If you
+  want docs to this, hit up:
+  http://download.oracle.com/docs/cd/E19963-01/821-1467/6nmetn6ms/index.html
+
+  Or whever suncle puts the gelf(3ELF) pages next.
  */
 
 static bool s_verbose;
@@ -61,6 +74,20 @@ std::ostream& VERBOSE() {
 		return ignored;
 	}
 }
+
+static int child_pid;
+static int shm_handle;
+static int obsvd_fd;
+
+static void shutdown(int sig) {
+  int64_t zero = 0;
+  write(obsvd_fd, &zero, sizeof(int));
+  kill(child_pid, SIGINT);
+  shmctl(shm_handle, IPC_RMID, 0);
+  child_pid = 0;
+  shm_handle = 0;
+}
+
 
 int attach (int argc, char **argv) {
 	int c;
@@ -109,19 +136,18 @@ int attach (int argc, char **argv) {
 	}
 
 	Elf * elfObserved;
-	char observed_pathname[512];
-	sprintf(observed_pathname, "/proc/%d/object/a.out", s_obsvd_pid);
 	int obsvd_aout_fd;
-	if ((obsvd_aout_fd = open(observed_pathname, O_RDONLY, 0)) <= 0) {
-		perror (observed_pathname);
-		return 1;
+	std::string exec_pathname = plat_exec_pathname(s_obsvd_pid);
+	if ((obsvd_aout_fd = open(exec_pathname.c_str(), O_RDONLY, 0)) <= 0) {
+	  perror (exec_pathname.c_str());
+	  return 1;
 	}
 
 	if ((elfObserved = elf_begin(obsvd_aout_fd, ELF_C_READ, NULL)) == NULL) {
-		printf ("opened %s but failed to read elf executable: %s\n",
-				observed_pathname, elf_errmsg(-1));
-		close (obsvd_aout_fd);
-		return 1;
+	  printf ("opened %s but failed to read elf executable: %s\n",
+		  exec_pathname.c_str(), elf_errmsg(-1));
+	  close (obsvd_aout_fd);
+	  return 1;
 	}
 
 	Elf_Kind elfObservedKind = elf_kind(elfObserved);
@@ -134,12 +160,16 @@ int attach (int argc, char **argv) {
 
 	std::map<Elf_Kind, const char *> s_elfkinds(s_elfkinds_init,
 						    s_elfkinds_init + 3);
+
 	/* most of this taken out of the gelf(3ELF) manpage */
 	Elf_Scn *scn = NULL;
 	GElf_Shdr shdr;
 	Elf_Data  *data;
 	int cur_value = -1;
 	int count = -1;
+	struct sigaction act;
+	off_t version_off;
+	off_t shm_off;
 
 	if (elfObservedKind != ELF_K_ELF) {
 		printf("Wrong type of object: %s\n", s_elfkinds[elfObservedKind]);
@@ -180,19 +210,19 @@ int attach (int argc, char **argv) {
 
 	//
 	// Open up the address space.
-	int fd_as;
-	char as_path[512];
-	sprintf(as_path, "/proc/%d/as", s_obsvd_pid);
 	TRACE() << "Opening up address space for pid " << s_obsvd_pid << std::endl;
-	if ((fd_as = open(as_path, O_RDWR, 0)) < 0) {
-		perror(as_path);
+	if ((obsvd_fd = plat_pid_address_space(s_obsvd_pid)) < 0) {
+		perror("address space for process");
 		goto fail;
 	}
 
+	version_off = plat_sym_loc(s_obsvd_pid, exec_pathname, sym_version.st_value);
+	shm_off = plat_sym_loc(s_obsvd_pid, exec_pathname, sym_shm.st_value);
 	
 	// first, read the version symbol
-	if (read(fd_as, &cur_value, sizeof(int)) != sizeof(int)) {
-		perror(as_path);
+	if (lseek(obsvd_fd, version_off, SEEK_SET) != version_off
+	    || read(obsvd_fd, &cur_value, sizeof(int)) != sizeof(int)) {
+		perror("get versioninfo");
 		goto fail_postfd;
 	}
 
@@ -205,19 +235,69 @@ int attach (int argc, char **argv) {
 	VERBOSE() << "Version check OK" << std::endl;
 
 	//
-	// OK.  Created the shared memory segment, call up the observer,
-	// and inject the handle into the observee.
+	// OK.  Created the shared memory segment, inject the handle
+	// into the observee, and call up the observer.
 	//
-	
-	
-	
+	if ((shm_handle = shmget(IPC_PRIVATE, shm_sz, IPC_CREAT)) == -1) {
+	  perror("shmget");
+	  goto fail_postfd;
+	}
+
+	if (lseek(obsvd_fd, shm_off, SEEK_SET) != shm_off
+	    || write(obsvd_fd, &shm_handle, sizeof(int)) != sizeof(int)) {
+	  perror("set shmem");
+	  goto fail_postfd;
+	}
+
+	// go back to the shared mem handle location.  The signal
+	// handler will zero it out when shutting down.
+	lseek(obsvd_fd, shm_off, SEEK_SET);
+
+	// note: defer SIGCLD until after we're done!
+	act.sa_handler = shutdown;
+	act.sa_sigaction = 0;
+	sigemptyset(&act.sa_mask);
+	sigaddset(&act.sa_mask, SIGCLD);
+	act.sa_flags = 0;
+	sigaction(SIGINT, &act, 0);
+
+	if (0 == (child_pid = fork())) {
+	  // child
+	  char logger_cmdline[2048];
+	  sprintf(logger_cmdline, logger_name.c_str(), shm_handle);
+	  
+	  // now, split the thing by spaces.
+	  char *cmd_end = logger_cmdline + strlen(logger_cmdline);
+	  char *args[64];
+	  int argc = 0;
+	  char * c = logger_cmdline;
+	  args[0] = c;
+	  do {
+	    c = strchr(c, ' ');
+	    while (*c && *c == ' ')
+	      *c++ = 0;
+	    args[++argc] = c;
+	  } while (c < cmd_end);
+	  args[++argc] = 0;
+	  execvp(args[0], args);
+	  perror(args[0]);
+	  exit(1);
+	}
+
+	// we're live.  now we're just around to get a shutdown signal.
+	//waitpid(child_pid, 0, 0);
+	while (child_pid) {
+	  pause();
+	}
+
+
 	// if we get here, there was no failure, so clean up and return 0.
 	// if there was a goto, it's below this line, defaulting to the
 	// prior value of 1.
 	retcode = 0;
 	
  fail_postfd:
-	close(fd_as);
+	close(obsvd_fd);
  fail:	
 	elf_end(elfObserved);
 	close(obsvd_aout_fd);
