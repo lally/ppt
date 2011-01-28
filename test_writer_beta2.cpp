@@ -1,5 +1,5 @@
-#include "beta2.h"
 
+#include "beta2.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,14 +68,14 @@ int main(int args, char **argv) {
     printf ("sizeof pptframe_beta2_t: %d bytes\n",
             sizeof (pptframe_beta2_t));
 
-    if (args < 2) {
+    /*    if (args < 2) {
         printf("usage: %s <size> [count] \n", argv[0]);
         puts  ("      size: number of frames in the buffer");
 	puts  ("      count: if present, how many times to fill the array before stopping");
         exit(1);
-    }
+	} */
 
-    size = atoi(argv[1]);
+    size = 10; //atoi(argv[1]);
     int iter_max = -1;
     if (args > 2) {
        iter_max= atoi(argv[2]);
@@ -97,7 +97,7 @@ int main(int args, char **argv) {
 #define SHM_W 00200
 #endif  
   
-    mid = shmget(key, size * sizeof (pptframe_beta2_t), 
+/*    mid = shmget(key, size * sizeof (pptframe_beta2_t), 
                  IPC_CREAT | IPC_EXCL | SHM_R | SHM_W);
     if (mid == -1) {
         perror("shmget");
@@ -110,7 +110,7 @@ int main(int args, char **argv) {
     signal(SIGKILL, kill);
 
 
-
+*/
     double whole_interval = 1000.0 + (1000.0 * new_freq());
     double interval = whole_interval / 31.25;
 
@@ -121,7 +121,7 @@ int main(int args, char **argv) {
     int counter = 0;
 
     // a little bit of a hack.
-    _ppt_hmem_beta2 = mid;
+//    _ppt_hmem_beta2 = mid;
 
     int iter_count = 0;
     while (iter_count != iter_max) {
@@ -145,8 +145,8 @@ int main(int args, char **argv) {
             interval = whole_interval / 31.25;
             last_upd = now;
             printf("%d/%d: %d Hz, whole_interval=%fms, interval=%fms, "
-                   "seqno=%d\n",  mid, size,
-                   counter, whole_interval, interval, counter);
+                   "seqno=%d\n",  mid, size, (int) interval,
+                   whole_interval, interval, counter);
         }
     }
 

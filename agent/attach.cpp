@@ -8,6 +8,7 @@
 #include <sstream>
 #include <iostream>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/stat.h>
@@ -56,36 +57,42 @@ int PT_SOLARIS_AGENT_VERSION = 1024;
 std::ostream& TRACE() {
 	static std::stringstream ignored;
 	if (s_trace) {
-		return std::cerr;
+	  return std::cerr << "> ";
 	}
 	else {
-		ignored.str().clear();
-		return ignored;
+	  ignored.str().clear();
+	  return ignored;
 	}
 }
 
 std::ostream& VERBOSE() {
 	static std::stringstream ignored;
 	if (s_verbose) {
-		return std::cerr;
+	  return std::cerr << "-  ";
 	}
 	else {
-		ignored.str().clear();
-		return ignored;
+	  ignored.str().clear();
+	  return ignored;
 	}
 }
 
 static int child_pid;
 static int shm_handle;
 static int obsvd_fd;
+static off_t shm_off;
 
 static void shutdown(int sig) {
   int64_t zero = 0;
-  write(obsvd_fd, &zero, sizeof(int));
+  // reopen the process, write the 'close' (zero) value, and disconnect.
+  obsvd_fd = plat_pid_address_space(s_obsvd_pid);
+  plat_write_address(obsvd_fd, s_obsvd_pid, shm_off, 0);
+  plat_pid_close_address_space(obsvd_fd);
   kill(child_pid, SIGINT);
   shmctl(shm_handle, IPC_RMID, 0);
   child_pid = 0;
   shm_handle = 0;
+  VERBOSE() << "child died.  exiting" << std::endl;
+  exit(0);
 }
 
 
@@ -97,19 +104,22 @@ int attach (int argc, char **argv) {
 
 	std::string  ver_sym_name, shm_sym_name, logger_name;
 	GElf_Sym sym_version = {0}, sym_shm = {0};
-	int ver_value = -1;
+	long ver_value = -1;
 	int shm_sz = -1;
-	while ((c = getopt(argc, argv, "p:s:S:v:i:#:VD")) != -1) {
-		switch (c) {
-		case 'p':  s_obsvd_pid = atoi(optarg);  break;
-		case 's':  shm_sym_name.assign(optarg);	break;
-		case 'S':  ver_sym_name.assign(optarg); break;
-		case 'v':  ver_value = atoi(optarg);    break;
-		case 'i':  logger_name.assign(optarg);  break;
-		case '#':  shm_sz = atoi(optarg);       break;
-		case 'V':  s_verbose = true;            break;
-		case 'D':  s_trace = true;              break;
-		}
+	bool has_ver = false;
+	bool trace_elf = false;
+	while ((c = getopt(argc, argv, "p:s:v:N:i:n:VDX")) != -1) {
+	  switch (c) {
+	  case 'p':  s_obsvd_pid = atoi(optarg);  break;
+	  case 's':  shm_sym_name.assign(optarg); break;
+	  case 'v':  ver_sym_name.assign(optarg); break;
+	  case 'N':  ver_value = strtoll(optarg, 0, 0);  has_ver = true; break;
+	  case 'i':  logger_name.assign(optarg);  break;
+	  case 'n':  shm_sz = atoi(optarg);       break;
+	  case 'V':  s_verbose = true;            break;
+	  case 'D':  s_trace = true;              break;
+	  case 'X':  trace_elf = true;            break;
+	  }
 	}
 	VERBOSE() << "This agent's pid is " << getpid() << std::endl;
 	VERBOSE() << "Observing pid " << s_obsvd_pid << std::endl;
@@ -120,7 +130,14 @@ int attach (int argc, char **argv) {
 	VERBOSE() << "Shared memory " << shm_sz << " bytes" << std::endl;
 	VERBOSE() << "Verbose is " << (s_verbose ? "ON": "OFF") << std::endl;
 	VERBOSE() << "Tracing is " << (s_trace ? "ON": "OFF") << std::endl;
+	VERBOSE() << "ELF Tracing is " << (trace_elf ? "ON": "OFF") << std::endl;
 	
+	if (!has_ver || shm_sz <= 0) {
+	  printf("More parameters needed: ver_value is %d (%x), shm_sz is %d\n",
+		 ver_value, ver_value, shm_sz);
+	  return 1;
+	}
+
 	if (elf_version(EV_CURRENT) == EV_NONE) {
 		printf("Failed libelf init: %s\n", elf_errmsg(-1));
 		return 1;
@@ -169,7 +186,6 @@ int attach (int argc, char **argv) {
 	int count = -1;
 	struct sigaction act;
 	off_t version_off;
-	off_t shm_off;
 
 	if (elfObservedKind != ELF_K_ELF) {
 		printf("Wrong type of object: %s\n", s_elfkinds[elfObservedKind]);
@@ -194,7 +210,9 @@ int attach (int argc, char **argv) {
 		GElf_Sym sym;
 		gelf_getsym(data, i, &sym);
 		char *symname = elf_strptr(elfObserved, shdr.sh_link, sym.st_name);
-		TRACE() << "Found symbol " << symname << std::endl;
+		if (trace_elf) {
+		  TRACE() << "Found symbol " << symname << std::endl;
+		}
 		if (!strcmp(symname, ver_sym_name.c_str())) {
 			sym_version = sym;
 		}
@@ -212,24 +230,19 @@ int attach (int argc, char **argv) {
 	// Open up the address space.
 	TRACE() << "Opening up address space for pid " << s_obsvd_pid << std::endl;
 	if ((obsvd_fd = plat_pid_address_space(s_obsvd_pid)) < 0) {
-		perror("address space for process");
-		goto fail;
+	  perror("address space for process");
+	  goto fail;
 	}
 
 	version_off = plat_sym_loc(s_obsvd_pid, exec_pathname, sym_version.st_value);
 	shm_off = plat_sym_loc(s_obsvd_pid, exec_pathname, sym_shm.st_value);
 	
 	// first, read the version symbol
-	if (lseek(obsvd_fd, version_off, SEEK_SET) != version_off
-	    || read(obsvd_fd, &cur_value, sizeof(int)) != sizeof(int)) {
-		perror("get versioninfo");
-		goto fail_postfd;
-	}
-
+	cur_value = plat_read_address(obsvd_fd, s_obsvd_pid, version_off);
 	if (cur_value != ver_value) {
-		printf("FAIL: binary version mismatch.  Wanted 0x%x, got 0x%x\n",
-			   ver_value, cur_value);
-		goto fail_postfd;
+	  printf("FAIL: binary version mismatch.  Wanted 0x%x, got 0x%x\n",
+		 ver_value, cur_value);
+	  goto fail_postfd;
 	}
 
 	VERBOSE() << "Version check OK" << std::endl;
@@ -238,20 +251,18 @@ int attach (int argc, char **argv) {
 	// OK.  Created the shared memory segment, inject the handle
 	// into the observee, and call up the observer.
 	//
-	if ((shm_handle = shmget(IPC_PRIVATE, shm_sz, IPC_CREAT)) == -1) {
+	if ((shm_handle = shmget(IPC_PRIVATE, shm_sz, IPC_CREAT | 0777)) == -1) {
 	  perror("shmget");
 	  goto fail_postfd;
 	}
 
-	if (lseek(obsvd_fd, shm_off, SEEK_SET) != shm_off
-	    || write(obsvd_fd, &shm_handle, sizeof(int)) != sizeof(int)) {
+	if (!plat_write_address(obsvd_fd, s_obsvd_pid, shm_off, shm_handle)) {
 	  perror("set shmem");
 	  goto fail_postfd;
 	}
 
 	// go back to the shared mem handle location.  The signal
 	// handler will zero it out when shutting down.
-	lseek(obsvd_fd, shm_off, SEEK_SET);
 
 	// note: defer SIGCLD until after we're done!
 	act.sa_handler = shutdown;
@@ -261,43 +272,47 @@ int attach (int argc, char **argv) {
 	act.sa_flags = 0;
 	sigaction(SIGINT, &act, 0);
 
+	plat_pid_close_address_space(s_obsvd_pid);
+	printf ("Process closed, shared memory handle %d inserted\n",
+		shm_handle);
 	if (0 == (child_pid = fork())) {
 	  // child
 	  char logger_cmdline[2048];
 	  sprintf(logger_cmdline, logger_name.c_str(), shm_handle);
-	  
+	  printf("Executing '%s'\n", logger_cmdline);
+
 	  // now, split the thing by spaces.
 	  char *cmd_end = logger_cmdline + strlen(logger_cmdline);
 	  char *args[64];
 	  int argc = 0;
 	  char * c = logger_cmdline;
-	  args[0] = c;
-	  do {
-	    c = strchr(c, ' ');
-	    while (*c && *c == ' ')
-	      *c++ = 0;
-	    args[++argc] = c;
-	  } while (c < cmd_end);
-	  args[++argc] = 0;
+	  args[0] = strtok(logger_cmdline, " ");
+	  while ((args[++argc] = strtok(NULL, " "))) 
+	    ;
+	  for (int i=0; i<argc; ++i) {
+	    printf("argv[%d] = '%s'\n", i, args[i]);
+	  }
 	  execvp(args[0], args);
 	  perror(args[0]);
 	  exit(1);
 	}
 
+	sleep(5); // wait 5 seconds for the child to notice we gave it shared mem
 	// we're live.  now we're just around to get a shutdown signal.
-	//waitpid(child_pid, 0, 0);
-	while (child_pid) {
+	waitpid(child_pid, 0, 0);
+	/*	while (child_pid) {
 	  pause();
-	}
-
+	  } */
+	shutdown(0);
 
 	// if we get here, there was no failure, so clean up and return 0.
 	// if there was a goto, it's below this line, defaulting to the
 	// prior value of 1.
 	retcode = 0;
-	
+	goto fail; // we've already closed the address space.
+
  fail_postfd:
-	close(obsvd_fd);
+	plat_pid_close_address_space(s_obsvd_pid);
  fail:	
 	elf_end(elfObserved);
 	close(obsvd_aout_fd);
