@@ -37,11 +37,12 @@ runCommand args cfg = do
 main = do
   -- TODO: Look at the command first.
   args <- getArgs
-  case head args of
-     "init" -> do
-               cfg <- createConfig
-               putStrLn ("Configuration created, Target = " ++ (show (cfgTarget cfg)))
-     otherwise -> do
+  if (length args) == 0 then showHelp else
+    case head args of
+      "init" -> do
+                cfg <- createConfig
+                putStrLn ("Configuration created, Target = " ++ (show (cfgTarget cfg)))
+      otherwise -> do
                config <- S.loadConfig
                case config of
                     Nothing -> putStrLn "Could not find configuration.  Run 'ppt init' to put one here."

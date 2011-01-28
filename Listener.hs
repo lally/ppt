@@ -160,7 +160,10 @@ buildReaderFun nm skip = do
           s_shmsz <- getArgv 3 argv
           store s_shmid v_p_perror
           shmid <- call atoi s_shmid
-          shmsz <- call atoi s_shmsz
+          raw_shmsz <- call atoi s_shmsz
+          shmsz <- ((udiv (raw_shmsz :: Value Int32) ((valueOf skip) :: Value Int32))
+                       :: CodeGenFunction r (Value Int32))
+                       
           shmsz' <- icmp IntSGT shmsz (0 :: Int32)
           condBr shmsz' try_fopen exit -- validate the size as > 0.
           
@@ -195,6 +198,7 @@ buildReaderFun nm skip = do
           defineBasicBlock init_vars
           store array_start v_p_cur
           store array_start v_p_stride
+            -- this mul on the udiv'd shmsz will nicely eliminate fractional-buf errors. 
           array_length <- mul shmsz (valueOf skip)
           array_end <- getElementPtr array_start (array_length, ())
           store (valueOf 0) v_seqno 
