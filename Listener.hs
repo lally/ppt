@@ -31,7 +31,7 @@ type LibCFOpenType = Function (Ptr Word8 -> Ptr Word8 -> IO (Ptr FILE))
 type LibCFCloseType = Function (Ptr FILE -> IO Int32)
 type LibCFWriteType = Function (Ptr Word8 -> Int32 -> Int32 ->Ptr FILE -> IO Int32)
 type LibCSetBufType = Function (Ptr FILE -> Ptr Word8 -> IO ())
-type LibCFPrintf = Function (Ptr Word8 -> Ptr Word8 -> VarArgs Word32)
+--type LibCFPrintf = Function (Ptr Word8 -> Ptr Word8 -> VarArgs Word32)
 type LibCFFlush = Function (Ptr Word8 -> IO Int32)
 type LibCatoi = Function (Ptr Word8 -> IO Int32)
 type LibCperror = Function (Ptr Word8 -> IO ())
@@ -66,14 +66,14 @@ s_max a b = do
 buildReaderFun :: String -> Int32 -> CodeGenModule (MainFunction)
 buildReaderFun nm skip = do
   -- NOTE: should I make these unlocked stdio calls?               
-  printf <- (newNamedFunction ExternalLinkage "printf" 
-             :: TFunction (Ptr Word8 -> VarArgs Word32))
+--  printf <- (newNamedFunction ExternalLinkage "printf" 
+--             :: TFunction (Ptr Word8 -> VarArgs Word32))
             
   puts <- (newNamedFunction ExternalLinkage "puts" 
            :: TFunction (Ptr Word8 -> IO Word32))
 
-  fprintf <- (newNamedFunction ExternalLinkage "fprintf" 
-              :: CodeGenModule(LibCFPrintf))
+--  fprintf <- (newNamedFunction ExternalLinkage "fprintf" 
+--              :: CodeGenModule(LibCFPrintf))
              
   fopen <- (newNamedFunction ExternalLinkage "fopen" 
             :: CodeGenModule(LibCFOpenType))
@@ -133,8 +133,8 @@ buildReaderFun nm skip = do
           p_exit <- newNamedBasicBlock "p_exit"
           exit <- newNamedBasicBlock "exit"
           
-          let printf_pattern =(castVarArgs printf 
-                      :: Function (Ptr Word8 -> Int32 -> IO Word32))
+--          let printf_pattern =(castVarArgs printf 
+--                      :: Function (Ptr Word8 -> Int32 -> IO Word32))
 
           v_stride <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
           v_count <- (alloca :: CodeGenFunction r (Value (Ptr Int32)))
@@ -230,7 +230,7 @@ buildReaderFun nm skip = do
           condBr rlh_seqno_gt accept_frame read_loop_head2
 
           -- read_loop_head2
-            -- or cur->seqno <= min (seqno - size, 0)
+            -- or cur->seqno <= seqno - size
           defineBasicBlock read_loop_head2
           rlh2_seqno <- load v_seqno
           rlh2_min_0 <- sub rlh2_seqno array_length
@@ -304,9 +304,9 @@ buildReaderFun nm skip = do
           wb_p_stride <- bitcast wb_p_stride'
           wb_stride <- load v_stride
           _ <- call fwrite wb_p_stride wb_stride (valueOf (skip*4)) tf_outfile
-          wb_pattern <- getElementPtr0 (pattern :: Global (Array D20 Word8)) (
-            0 :: Word32, ())
-          _ <- call printf_pattern wb_pattern wb_stride
+--          wb_pattern <- getElementPtr0 (pattern :: Global (Array D20 Word8)) (
+--            0 :: Word32, ())
+--          _ <- call printf_pattern wb_pattern wb_stride
 
           wb_p_cur <- load v_p_cur
           store wb_p_cur v_p_stride

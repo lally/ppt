@@ -75,6 +75,62 @@ makeHeader cfg impl@(Impl _ nm fs) fname =
              fullTempl = setManyAttrib [("names",nameValues), ("macros", macroValues)] scalarTempl
           in render fullTempl
              
+makeCReader :: RunConfig -> FullSpecification -> FullImplementation -> String -> String
+makeCReader c spec impl@(Impl _ nm fs) fname =
+  let tstr = unlines [ "#include <sys/types.h>",
+                       "#include <sys/shm.h>",
+                       "#include \"$header$\"",
+                       "#include <stdio.h>",
+                       "#include <stdlib.h>",
+                       "#include <unistd.h>",
+                       "",
+                       "int main(int args, char ** argv) {",
+                       "    if (args < 4) return 1;",
+                       "    FILE *out = fopen(argv[1], \"w\");",
+                       "    int shm_handle = atoi(argv[2]);",
+                       "    int shm_sz = atoi(argv[3]);",
+                       "    if (!out || shm_handle <= 0 || shm_sz <= 0)  { return 1; }",
+                       "    shm_sz /= (sizeof ($structname$));",
+                       "    $structname$ *start, *end, *cur;",
+                       "    start = ($structname$ *) shmat(shm_handle, 0, SHM_RDONLY);",
+                       "    end = start + shm_sz;",
+                       "    cur = start;",
+                       "    int seqno=0, last_cur_seqno = 0, last_seqno=0, delay=10000, stride=0;",
+                       "    int count = 0;",
+                       "    int cont_read = 1;",
+                       "    while (1) {",
+                       "      count = 0;",
+                       "      cont_read = 1;",
+                       "      while (cur->ppt_seqno > seqno",
+                       "             || cur->ppt_seqno <= seqno - shm_sz",
+                       "             || count == 0 && cur->ppt_seqno != last_cur_seqno) {",
+                       "        stride++;",
+                       "        seqno = cur->ppt_seqno;"
+                       "        count++;",
+                       "        if (end == ++cur) {",
+                       "          fwrite(cur - stride, stride, sizeof ($structname$), out);",
+                       "          cur = start;",
+                       "          stride = 0;",
+                       "        }",
+                       "      }",
+                       "      fwrite(cur - stride, stride, sizeof ($structname$), out);",
+                       "      stride = 0;",
+                       "      if (count < (shm_sz / 8) || count > (7 * shm_sz / 8)) {",
+                       "        // rate eqn = count / delay.  new delay = sz/2 * rate",
+                       "        // delay = sz /2 * count / delay = sz * count / (2 * delay)",
+                       "        delay = (shm_sz * count) / (2 * delay);",
+                       "        if (delay < 10) delay = 10;",
+                       "        if (delay > 2000) delay = 2000;",
+                       "      }",
+                       "      usleep(delay * 1000);",
+                       "    }",
+                       "}",
+                       "" ]
+      t = newSTMP tstr :: StringTemplate String
+      fullTempl = setManyAttrib [("header",  fname ++ ".h"), 
+                                 ("structname", "pptframe_" ++ nm ++ "_t")] t
+  in render fullTempl
+
 
 makeSource :: RunConfig -> FullSpecification -> FullImplementation -> String -> String
 makeSource c spec impl@(Impl _ nm fs) fname = -- undefined
@@ -93,6 +149,8 @@ makeSource c spec impl@(Impl _ nm fs) fname = -- undefined
                                "void ppt_write_$nm$_frame() {",
                                "  if (_ppt_hmem_$nm$) {",
                                "      if (s_start) {",
+                               "          s_cur->ppt_seqno = 0;",
+                               "          __sync_synchronize(); // gcc builtin",
                                "          $assigns; separator=\";\n          \"$;",
                                "          __sync_synchronize(); // gcc builtin",
                                "          s_cur->ppt_seqno = _ppt_frame_$nm$.ppt_seqno++;",
@@ -177,7 +235,9 @@ makeConverter c impl@(Impl _ nm fs) fname =
                                "            fclose(out);",
                                "            exit(0);",
                                "        }",
-                               "        fprintf(out, \"$formats; separator=\"\\\\t\"$\\\\n\", buf.$names; separator=\", buf.\"$);",
+                               "        if (buf.ppt_seqno) {",
+                               "          fprintf(out, \"$formats; separator=\"\\\\t\"$\\\\n\", buf.$names; separator=\", buf.\"$);",
+                               "        }",
                                "    }",
                                "",
                                "    return 0;",
@@ -190,5 +250,5 @@ makeConverter c impl@(Impl _ nm fs) fname =
                formats = concatMap memberFormat mems
            in render $ setAttribute "formats" formats $ setAttribute "names" names $ setAttribute "nm" nm $ setAttribute "elements" elements t
 
-emitC :: RunConfig -> FullSpecification -> FullImplementation -> String -> (String, String, String)
-emitC cfg spec impl fname = (makeHeader cfg impl fname, makeSource cfg spec impl fname, makeConverter cfg impl fname)
+emitC :: RunConfig -> FullSpecification -> FullImplementation -> String -> (String, String, String, String)
+emitC cfg spec impl fname = (makeHeader cfg impl fname, makeSource cfg spec impl fname, makeConverter cfg impl fname, makeCReader cfg spec impl fname)

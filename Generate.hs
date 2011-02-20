@@ -41,12 +41,14 @@ doGenerate spec@(Spec emit _ frames) basefname cfg = do
               header_name = (basefname ++ ".h")
               source_name = (basefname ++ ".c")
               converter_name = (basefname ++ "_convert.c")
-              (header, source, converter) = 
+              creader_name = (basefname ++ "_listen.c")
+              (header, source, converter, creader) = 
                 emitC cfg spec impl basefname
           makeSpecPath cfg spec
           writeFile (dstpath ++ header_name) header
           writeFile (dstpath ++ source_name) source
           writeFile (dstpath ++ converter_name) converter
+          writeFile (dstpath ++ creader_name) creader
           L.generateReader cfg spec (dstpath ++ basefname ++ ".ll")
     
         {- If it isn't obvious, this is just a stub -}
@@ -55,13 +57,15 @@ doGenerate spec@(Spec emit _ frames) basefname cfg = do
               header_name = (basefname ++ ".h")
               source_name = (basefname ++ ".cpp")
               converter_name = (basefname ++ "_convert.cpp")
-              (header, source, converter) = 
+              creader_name = (basefname ++ "_listen.cpp")
+              (header, source, converter, creader) = 
                 emitC cfg spec impl basefname {- <--- Obvious? -}
           putStrLn "Note, this is unsupported, and 'checkout' will not work correctly."
           makeSpecPath cfg spec
           writeFile (dstpath ++ header_name) header
           writeFile (dstpath ++ source_name) source
           writeFile (dstpath ++ converter_name) converter
+          writeFile (dstpath ++ creader_name) creader
           L.generateReader cfg spec (dstpath ++ basefname ++ ".ll")
 
 --  putStrLn (show result) 
@@ -102,4 +106,5 @@ checkout files cfg = do
                   mapM_ (\suff -> do
                                let n = (basefilename ++ suff)  
                                putStrLn ("Copied " ++ n)
-                               copyFile (dstpath ++ n) n) [".h", ".c", ".ll", "_convert.c"]) files
+                               copyFile (dstpath ++ n) n) [".h", ".c", ".ll", 
+                                                           "_convert.c", "_listen.c"]) files
