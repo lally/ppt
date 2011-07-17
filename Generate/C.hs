@@ -139,7 +139,7 @@ makeCReader c spec impl@(Impl _ nm fs) fname =
                        "      }",
                        "      if (delay < 10) delay = 10;",
                        "      if (delay > 2000) delay = 2000;",
-                       "      printf (\"Sleeping for %d ms. last_seqno=%d\\n\", delay, last_seqno);",
+                       "      printf (\"Sleeping for %d ms. last_seqno=%d\\\\n\", delay, last_seqno);",
                        "      usleep(delay * 1000);",
                        "    }",
                        "}",
@@ -160,8 +160,8 @@ makeSource c spec impl@(Impl _ nm fs) fname = -- undefined
                                "#ifndef __GNUC__",
                                "#define GCC_VERSION 0",
                                "#else",
-                               "#define GCC_VERSION (__GNUC__ * 10000 \\",
-                               "                     + __GNUC_MINOR__ * 100  \\",
+                               "#define GCC_VERSION (__GNUC__ * 10000 \\\\",
+                               "                     + __GNUC_MINOR__ * 100  \\\\",
                                "                     + __GNUC_PATCHLEVEL__)",
                                "#endif",
                                "",
@@ -216,7 +216,7 @@ isPartOfOutput (ImplMember Nothing IMSeqno) = True
 isPartOfOutput (ImplMember Nothing _) = False
 
 memberNames :: ImplMember -> [String]
-memberNames (ImplMember (Just (FrameElement _ nm)) IMTime) = [nm ++ ".tv_sec", nm ++ "tv_usec"]
+memberNames (ImplMember (Just (FrameElement _ nm)) IMTime) = [nm ++ ".tv_sec", nm ++ ".tv_usec"]
 memberNames (ImplMember (Just (FrameElement _ nm)) _) = [nm]
 memberNames (ImplMember Nothing IMSeqno) = ["ppt_seqno"]
 

@@ -32,6 +32,7 @@
     -# sz -- size of shared memory, in bytes to create
     -V -- be verbose
     -D -- debugging traces.
+    -u -- (unsafe) ignore version
 
   attach will run until it receives a signal, or until either the pid
   or logger die.  In any case, it'll nuke the shared memory symbol,
@@ -108,7 +109,8 @@ int attach (int argc, char **argv) {
 	int shm_sz = -1;
 	bool has_ver = false;
 	bool trace_elf = false;
-	while ((c = getopt(argc, argv, "p:s:v:N:i:n:VDX")) != -1) {
+        bool ignore_version = false;
+	while ((c = getopt(argc, argv, "p:s:v:N:i:n:VDXu")) != -1) {
 	  switch (c) {
 	  case 'p':  s_obsvd_pid = atoi(optarg);  break;
 	  case 's':  shm_sym_name.assign(optarg); break;
@@ -119,6 +121,9 @@ int attach (int argc, char **argv) {
 	  case 'V':  s_verbose = true;            break;
 	  case 'D':  s_trace = true;              break;
 	  case 'X':  trace_elf = true;            break;
+          case 'u':  ignore_version = true;       break;
+          default: printf("unknown flag '%c'\n", c);
+                   exit(1);
 	  }
 	}
 	VERBOSE() << "This agent's pid is " << getpid() << std::endl;
@@ -239,7 +244,7 @@ int attach (int argc, char **argv) {
 	
 	// first, read the version symbol
 	cur_value = plat_read_address(obsvd_fd, s_obsvd_pid, version_off);
-	if (cur_value != ver_value) {
+	if (!ignore_version && cur_value != ver_value) {
 	  printf("FAIL: binary version mismatch.  Wanted 0x%x, got 0x%x\n",
 		 ver_value, cur_value);
 	  goto fail_postfd;
