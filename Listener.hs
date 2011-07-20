@@ -390,7 +390,7 @@ buildReaderFun nm skip = do
   withStringNul nm callPuts
   
 generateReader :: RunConfig -> FullSpecification -> String -> IO ()
-generateReader cfg s@(Spec _ nm specs) filename = do
+generateReader cfg s@(Spec _ (Frame nm specs)) filename = do
   let impl@(Impl _ _ mems) = implement cfg s
       total = sum $ map (implSize cfg) mems
       -- nwords is the size of the struct, in multiples of (sizeof int)

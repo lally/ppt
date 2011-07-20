@@ -57,7 +57,7 @@ binaryPath (RunConfig cfg _) nm = cfg ++ "generated/" ++ nm
 
 -- specPath returns a folder name for the specified FrameSpecification
 specPath :: RunConfig -> SI.FullSpecification -> FilePath
-specPath (RunConfig cfg _) spec@(SI.Spec _ name elems) =
+specPath (RunConfig cfg _) spec@(SI.Spec _ (SI.Frame name elems)) =
          let hash = concatMap show (SI.specHash spec)
           in cfg ++ "static/" ++ name ++ "/" ++ hash ++ "/"
 

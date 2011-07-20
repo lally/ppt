@@ -32,7 +32,7 @@ arglist = [GO.Option ['o'] ["output"] (GO.ReqArg OutputFile "output")
 
 
 doGenerate :: FullSpecification -> String -> RunConfig -> IO ()
-doGenerate spec@(Spec emit _ frames) basefname cfg = do
+doGenerate spec@(Spec emit (Frame _ frames)) basefname cfg = do
       let impl = implement cfg spec
 --      putStrLn (show impl)
       case emit of
@@ -81,7 +81,7 @@ generate args cfg =
       let result = SIP.parseText SIP.commandFile text file
       case result of
            Left err -> putStrLn ("ERROR: " ++ (show err))
-           Right spec@(Spec emit _ frames) ->
+           Right spec@(Spec emit (Frame _ frames)) ->
                  doGenerate spec basename cfg
                  where
                     isfname (OutputFile _) = True

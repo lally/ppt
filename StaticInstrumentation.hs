@@ -23,7 +23,10 @@ data EmissionSpec = LangC
                   | LangCpp
                     deriving Show
 
-data FullSpecification = Spec EmissionSpec String [FrameElement]
+data Frame = Frame String [FrameElement]
+             deriving Show
+
+data FullSpecification = Spec EmissionSpec [Frame]
                          deriving Show
 
 specHash :: FullSpecification -> [Word8]
