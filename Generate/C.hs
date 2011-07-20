@@ -39,20 +39,36 @@ makeMacro frame (ImplMember (Just (FrameElement _ mem)) _) =
                                  ("ufr", (map toUpper frame)), ("umem", (map toUpper mem))] t
           in render u
 
+makeFrameDecl :: RunConfig -> ImplFrame -> String
+makeFrameDecl cfg (ImplFrame frname members) =
+              let templstr = unlines [
+                                     "//",
+                                     "// Frames for $nm$",
+                                     "typedef struct ppt_tag_struct_$nm$ {",
+                                     "  $names; separator=\";\n  \"$;",
+                                     "} pptframe_$nm$_t;",
+                                     "",
+                                     "#define $macros; separator=\";\n#define \"$",
+                                     ""]
+                  -- Build our base template
+                  scalarTempl = setManyAttrib [("nm", frname)] $ newSTMP templstr
+                  -- Assemble $names and $macros.
+                  nameValues = (map (\(a,b) -> typeBody cfg a b) $ zip members [1..]) :: [String]
+                  macroValues = map (makeMacro frname) $ filter hasFrameElement members
+                  -- And shove them into the template.
+                  fullTempl = setManyAttrib [("names", nameValues), ("macros", macroValues)] scalarTempl
+               in render fullTempl
+
 makeHeader :: RunConfig -> FullImplementation -> String -> String
-makeHeader cfg impl@(Impl _ nm fs) fname =
+makeHeader cfg impl@(Impl _ nm frames) fname =
          let tstr = unlines ["#ifndef $sym$",
                     "#define $sym$",
                     "",
                     "#include <sys/time.h>",
                     "",
-                    "typedef struct ppt_tag_struct_$nm$ {",
-                    "  $names; separator=\";\n  \"$;",
-                    "} pptframe_$nm$_t __attribute__ ((packed));",
+                    "$framedecls; separator=\"\n\n\"$;",
                     "",
-                    "#define $macros; separator=\"\n#define \"$",
-                    "",
-                    "extern pptframe_$nm$_t _ppt_frame_$nm$;",
+                    "// Transfer buffer variables for $nm$",
                     "extern int _ppt_hmem_$nm$;",
                     "extern int _ppt_hsize_$nm$;",
                     "extern unsigned char _ppt_version_$nm$[16];",
@@ -62,17 +78,16 @@ makeHeader cfg impl@(Impl _ nm fs) fname =
                     "void ppt_write_$nm$_frame();",
                     "#ifdef _cplusplus",
                     "}",
-                    "#endif",
+                    "#endif /* #ifdef _cplusplus */",
                     "#endif /* #ifndef $sym$ */",
                     ""]
              t = newSTMP tstr :: StringTemplate String
-             -- now that we have the template, add the members
-             nameValues = (map (\(a,b) -> typeBody cfg a b) $ zip fs [1..]) :: [String]
-             macroValues =  map (makeMacro nm) $ filter hasFrameElement fs
+             -- Build the frame decl templates
+             declTemplates = map (makeFrameDecl cfg) frames
              sym = "INCLUDE_" ++ (map toUpper (replace "." "_" fname))
              -- put in the scalar attributes
              scalarTempl = setManyAttrib [("sym", sym), ("nm",nm)] t
-             fullTempl = setManyAttrib [("names",nameValues), ("macros", macroValues)] scalarTempl
+             fullTempl = setManyAttrib [("framedecls", declTemplates)] scalarTempl
           in render fullTempl
              
 makeCReader :: RunConfig -> FullSpecification -> FullImplementation -> String -> String
@@ -151,7 +166,7 @@ makeCReader c spec impl@(Impl _ nm fs) fname =
 
 
 makeSource :: RunConfig -> FullSpecification -> FullImplementation -> String -> String
-makeSource c spec impl@(Impl _ nm fs) fname = -- undefined
+makeSource c spec impl@(Impl _ nm fs) fname = 
            let tstr = unlines ["#include \"$fname$.h\"",
                                "",
                                "#include <sys/types.h>",
@@ -169,20 +184,21 @@ makeSource c spec impl@(Impl _ nm fs) fname = -- undefined
                                "#define __sync_synchronize()",
                                "#endif",
                                "",
-                               "static pptframe_$nm$_t *s_start, *s_end, *s_cur;",
+                               "static pptframe_$first$_t *s_start, *s_end, *s_cur;",
                                "pptframe_$nm$_t _ppt_frame_$nm$;",
                                "int _ppt_hmem_$nm$;",
                                "int _ppt_hsize_$nm$;",
                                "unsigned char _ppt_version_$nm$[16] = {$vbytes; separator=\", \"$};",
                                "",
-                               "void ppt_write_$nm$_frame() {",
+                               "void ppt_write_$nm$_frame(pptframe_$first$_t *src) {",
+                               "  static int ppt_$nm$_seqno;",
                                "  if (_ppt_hmem_$nm$) {",
                                "      if (s_start) {",
-                               "          s_cur->ppt_seqno = 0;",
+                               "          src->ppt_seqno = 0;",
                                "          __sync_synchronize(); // gcc builtin",
-                               "          $assigns; separator=\";\n          \"$;",
+                               "          memcpy(s_cur, src, sizeof(pptframe_$first$_t));",
                                "          __sync_synchronize(); // gcc builtin",
-                               "          if (++_ppt_frame_$nm$.ppt_seqno < 0) { _ppt_frame_$nm$.ppt_seqno = 1; }",
+                               "          if (++ppt_$nm$_seqno < 0) { ppt_$nm$_seqno = 1; }",
                                "          s_cur->ppt_seqno = _ppt_frame_$nm$.ppt_seqno;",
                                "          s_cur++;",
                                "          if (s_cur == s_end) { s_cur = s_start; }",
@@ -191,11 +207,11 @@ makeSource c spec impl@(Impl _ nm fs) fname = -- undefined
                                "          // determine the size of the shared memory segment, and attach it.",
                                "          struct shmid_ds buf;",
                                "          if (shmctl(h, IPC_STAT, &buf) != 0",
-                               "              || ((s_start = (pptframe_$nm$_t *) shmat(h, 0, 0600))) == (pptframe_$nm$_t *) -1) {",
+                               "              || ((s_start = (pptframe_$first$_t *) shmat(h, 0, 0600))) == (pptframe_$first$_t *) -1) {",
                                "              _ppt_hmem_$nm$ = 0;",
                                "              return;  // abort attach.",
                                "          }",
-                               "          s_end = s_start + (buf.shm_segsz / sizeof(pptframe_$nm$_t));",
+                               "          s_end = s_start + (buf.shm_segsz / sizeof(pptframe_$first$_t));",
                                "          s_cur = s_start;",
                                "      }",
                                "  } else if (s_start) {",
@@ -205,10 +221,11 @@ makeSource c spec impl@(Impl _ nm fs) fname = -- undefined
                                "}",
                                ""]
                t = newSTMP tstr ::StringTemplate String
-               mems = map memberName $ filter hasFrameElement fs
                ver_bytes = map show $ specHash spec
-               assigns = map (\e -> "s_cur->" ++ e ++ " = _ppt_frame_" ++ nm ++ "." ++ e) mems
-           in render $ setAttribute "vbytes" ver_bytes $ setAttribute "fname" fname $ setAttribute "nm" nm $ setAttribute "assigns" assigns t
+               (ImplFrame first _) = head fs
+               arrayTempl = setAttribute "vbytes" ver_bytes t
+               scalarTempl = setManyAttrib [("fname", fname), ("nm", nm), ("first", first)] arrayTempl
+           in render scalarTempl
 
 isPartOfOutput :: ImplMember -> Bool
 isPartOfOutput (ImplMember (Just _) _) = True
@@ -227,16 +244,32 @@ memberFormat (ImplMember _ IMInt) = ["%d"]
 memberFormat (ImplMember _ IMSeqno) = ["%d"]
 memberFormat (ImplMember _ IMTime) = ["%d", "%d"]
 
+makePrintFunction :: RunConfig -> ImplFrame -> String
+makePrintFunction cfg frame@(ImplFrame name members) = 
+                  let templStr = unlines ["void print_$name$(const pptframe_$name$_t* src, FILE* dest) {",
+                                          "  if (src->ppt_seqno) {",
+                                          "    fprintf(dest, \"$name$\\\\t$formats; separator=\"\\\\t\"$\\\\n\",",
+                                          "            src->$names; separator=\", src->\"$);",
+                                          "  }",
+                                          ""]
+                      t = newSTMP templStr :: StringTemplate String
+                      mems = filter isPartOfOutput members
+                      names = concatMap memberNames mems
+                      formats = concatMap memberFormat mems
+                   in render $ setManyAttrib [("names", names), ("formats", formats)] $ setAttribute "name" name t
 
+makeCase :: RunConfig -> ImplFrame -> Int -> String
+makeCase cfg (ImplFrame name _)  nr  = 
+         "case " ++ (show nr) ++ ": print_" ++ name ++ "((const pptframe_" ++ name ++ "_t*) &buf);"
 
 makeConverter :: RunConfig -> FullImplementation -> String -> String
-makeConverter c impl@(Impl _ nm fs) fname = 
+makeConverter cfg impl@(Impl _ nm frames) fname = 
+           -- 'nm' is the name of the entire implementation (e.g. the buffer).
+           -- 'firstname' is the name of the first frame type.
            let tstr = unlines ["#include <stdio.h>",
                                "#include <stdlib.h>",
                                "",
-                               "typedef struct tag_pptframe_$nm$_t {",
-                               "  $elements; separator=\";\n  \"$;",
-                               "} pptframe_$nm$_t __attribute__ ((packed));",
+                               "$framedecls; separator=\"\n\n\"$;",
                                "",
                                "",
                                "int main(int args, char ** argv) {",
@@ -260,25 +293,24 @@ makeConverter c impl@(Impl _ nm fs) fname =
                                "    fprintf(out, \"$names; separator=\"\\\\t\"$\\\\n\");",
                                "",
                                "    while (1) {",
-                               "        pptframe_$nm$_t buf;",
-                               "        if (!fread(&buf, sizeof(pptframe_$nm$_t), 1, in)) {",
+                               "        pptframe_$firstname$_t buf;",
+                               "        if (!fread(&buf, sizeof(pptframe_$firstname$_t), 1, in)) {",
                                "            fclose(out);",
                                "            exit(0);",
                                "        }",
-                               "        if (buf.ppt_seqno) {",
-                               "          fprintf(out, \"$formats; separator=\"\\\\t\"$\\\\n\", buf.$names; separator=\", buf.\"$);",
-                               "        }",
+                               "        switch (buf.ppt_discriminator) {",
+                               "        $cases; separator=\"\n        \"$}",
                                "    }",
                                "",
                                "    return 0;",
                                "}",
                                ""]
                t = newSTMP tstr ::StringTemplate String
-               mems =  filter isPartOfOutput fs
-               elements = (map (\(a,b) -> typeBody c a b) $ zip fs [1..]) :: [String]
-               names =  concatMap memberNames mems
-               formats = concatMap memberFormat mems
-           in render $ setAttribute "formats" formats $ setAttribute "names" names $ setAttribute "nm" nm $ setAttribute "elements" elements t
+               framedecls = map (makeFrameDecl cfg) frames
+               cases = map (\(frame, nr) -> makeCase cfg frame nr) $ zip frames [1..]
+               arrayTempl = setManyAttrib [("framedecls", framedecls), ("cases", cases)] t
+               (ImplFrame firstname _) = head frames
+           in render $ setManyAttrib [("nm", nm), ("firstname", firstname)] arrayTempl
 
 emitC :: RunConfig -> FullSpecification -> FullImplementation -> String -> (String, String, String, String)
 emitC cfg spec impl fname = (makeHeader cfg impl fname, makeSource cfg spec impl fname, makeConverter cfg impl fname, makeCReader cfg spec impl fname)

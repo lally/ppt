@@ -32,7 +32,7 @@ arglist = [GO.Option ['o'] ["output"] (GO.ReqArg OutputFile "output")
 
 
 doGenerate :: FullSpecification -> String -> RunConfig -> IO ()
-doGenerate spec@(Spec emit (Frame _ frames)) basefname cfg = do
+doGenerate spec@(Spec emit _ frames) basefname cfg = do
       let impl = implement cfg spec
 --      putStrLn (show impl)
       case emit of
@@ -60,7 +60,8 @@ doGenerate spec@(Spec emit (Frame _ frames)) basefname cfg = do
               creader_name = (basefname ++ "_listen.cpp")
               (header, source, converter, creader) = 
                 emitC cfg spec impl basefname {- <--- Obvious? -}
-          putStrLn "Note, this is unsupported, and 'checkout' will not work correctly."
+          putStrLn ("Note, this is unsupported, and 'checkout' will not " ++ 
+                   "work correctly.")
           makeSpecPath cfg spec
           writeFile (dstpath ++ header_name) header
           writeFile (dstpath ++ source_name) source
@@ -81,7 +82,7 @@ generate args cfg =
       let result = SIP.parseText SIP.commandFile text file
       case result of
            Left err -> putStrLn ("ERROR: " ++ (show err))
-           Right spec@(Spec emit (Frame _ frames)) ->
+           Right spec@(Spec emit _ frames) ->
                  doGenerate spec basename cfg
                  where
                     isfname (OutputFile _) = True

@@ -390,13 +390,16 @@ buildReaderFun nm skip = do
   withStringNul nm callPuts
   
 generateReader :: RunConfig -> FullSpecification -> String -> IO ()
-generateReader cfg s@(Spec _ (Frame nm specs)) filename = do
-  let impl@(Impl _ _ mems) = implement cfg s
-      total = sum $ map (implSize cfg) mems
+generateReader cfg s@(Spec _ (Buffer nm _ _) frames) filename = do
+  -- We only need the size of the whole thing, so take the first frame
+  -- type (they're all the same length) and use that to get our size.
+  let (Impl _ _ frames) = implement cfg s 
+      (ImplFrame _ memsOfFirstFrame) = head frames
+      total = sum $ map (implSize cfg) memsOfFirstFrame
       -- nwords is the size of the struct, in multiples of (sizeof int)
       nwords = (fromIntegral (total `div` 4)) :: Int32
   mod <- newNamedModule nm
   defineModule mod (buildReaderFun nm nwords)
---  optimizeModule 2 mod
+--  optimizeModule 2 mod  -- This should work in later, less-buggy versions of LLVM.
   writeBitcodeToFile filename mod
   

@@ -23,10 +23,19 @@ data EmissionSpec = LangC
                   | LangCpp
                     deriving Show
 
+{- A buffer is a unified container of all frames within it.
+ Ultimately we'd like to allow automatic calculation of the write rate
+ and the read rate, to feed the initial reading process's sleep. 
+-}
+
+-- Buffer(name of buffer, size, rate (in Hz))
+data Buffer = Buffer String (Maybe Int) (Maybe Int)
+              deriving Show
+
 data Frame = Frame String [FrameElement]
              deriving Show
 
-data FullSpecification = Spec EmissionSpec [Frame]
+data FullSpecification = Spec EmissionSpec Buffer [Frame]
                          deriving Show
 
 specHash :: FullSpecification -> [Word8]
@@ -37,11 +46,15 @@ data ImplMemberType = IMDouble
                     | IMInt
                     | IMTime -- struct timeval.
                     | IMSeqno -- added sequence number.
+                    | IMDescriminator -- type descriminator
                     | IMPad Int -- padding, with byte count
                     deriving Show
 
 data ImplMember = ImplMember (Maybe FrameElement) ImplMemberType
                 deriving Show
 
-data FullImplementation = Impl EmissionSpec String [ImplMember]
+data ImplFrame = ImplFrame String [ImplMember]
+                 deriving Show
+
+data FullImplementation = Impl EmissionSpec String [ImplFrame]
                         deriving Show
