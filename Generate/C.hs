@@ -23,7 +23,7 @@ memberName :: ImplMember -> String
 memberName (ImplMember (Just (FrameElement _ nm)) _) = nm
 
 typeBody :: RunConfig -> ImplMember -> Int -> String
-typeBody cfg (ImplMember Nothing (IMSeqno SFront)) _ = "/* ppt */ int ppt_seqno_front"
+typeBody cfg (ImplMember Nothing (IMSeqno SFront)) _ = "/* ppt */ int ppt_seqno"
 typeBody cfg (ImplMember Nothing (IMSeqno SBack)) _ = "/* ppt */ int ppt_seqno_back"
 typeBody cfg (ImplMember Nothing IMDescriminator) _ = "/* ppt */ int ppt_type"
 typeBody cfg (ImplMember Nothing (IMPad n)) i = 
@@ -373,8 +373,9 @@ makeConverter cfg impl@(Impl _ nm frames) _ =
                cases = map (\(frame, nr) -> makeCase cfg frame nr) $ zip frames [1..]
                opens = map (makeOpenFunction cfg) frames
                closes = map (\(ImplFrame k _) -> ("    fclose(out_" ++ k ++ ")")) frames
+               outnames = map (\(ImplFrame k _) -> ("out_ " ++ k)) frames
                arrayTempl = setManyAttrib [("framedecls", framedecls), ("cases", cases), 
-                                          ("opens", opens), ("closes", closes)] t
+                                          ("opens", opens), ("closes", closes), ("outnames", outnames)] t
                (ImplFrame firstname _) = head frames
            in render $ setManyAttrib [("nm", nm), ("firstname", firstname)] arrayTempl
 
