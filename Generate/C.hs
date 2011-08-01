@@ -206,6 +206,8 @@ makeSource c spec impl@(Impl _ nm fs) fname =
                                "#include <sys/types.h>",
                                "#include <sys/ipc.h>",
                                "#include <sys/shm.h>",
+                               "#include <string.h>",
+                               "",
                                "#ifndef __GNUC__",
                                "#define GCC_VERSION 0",
                                "#else",
@@ -235,8 +237,8 @@ makeSource c spec impl@(Impl _ nm fs) fname =
                                "          memcpy(s_cur, src, sizeof(pptframe_$first$_t));",
                                "          __sync_synchronize(); // gcc builtin",
                                "          if (++ppt_$nm$_seqno < 0) { ppt_$nm$_seqno = 1; }",
-                               "          s_cur->ppt_seqno_back = _ppt_frame_$nm$.ppt_seqno;",
-                               "          s_cur->ppt_seqno = _ppt_frame_$nm$.ppt_seqno;",
+                               "          s_cur->ppt_seqno_back = _ppt_frame_$first$.ppt_seqno;",
+                               "          s_cur->ppt_seqno = _ppt_frame_$first$.ppt_seqno;",
                                "          s_cur++;",
                                "          if (s_cur == s_end) { s_cur = s_start; }",
                                "      } else {",
@@ -313,10 +315,10 @@ makeOpenFunction cfg (ImplFrame name elems) =
 makeCase :: RunConfig -> ImplFrame -> Int -> String
 makeCase cfg frame@(ImplFrame name members) k = 
          let templStr = unlines [
-                           "case $nr$ {",
+                           "case $nr$: {",
                            "          pptframe_$name$_t *tmp = (pptframe_$name$_t*) &buf;",
                            "          if (tmp->ppt_seqno && tmp->ppt_seqno == tmp->ppt_seqno_back) {",
-                           "            fprintf(dest, \"$formats; separator=\"\\\\t\"$\\\\n\",",
+                           "            fprintf(out_$name$, \"$formats; separator=\"\\\\t\"$\\\\n\",",
                            "                    tmp->$names; separator=\", tmp->\"$);",
                            "          }",
                            "        } break;"]
@@ -338,13 +340,15 @@ makeConverter cfg impl@(Impl _ nm frames) _ =
                                "",
                                "",
                                "int main(int args, char ** argv) {",
+                               "    char namebuf[128];"
+                               "    FILE *in, *$outnames; separator=\", *\"$;",
+                               "",
                                "    if (args <3) {",
                                "        printf(\"usage: %s infile outfile_base\\\\n\", argv[0]);",
                                "        puts  (\"  to print out raw $nm$ entries to tab-separated text.\");",
                                "        exit(1);",
                                "    }",
                                "",
-                               "    FILE *in, *$outnames; separator=\", *\"$;",
                                "    if (!(in = fopen(argv[1], \"r\"))) {",
                                "        puts(argv[1]);",
                                "        exit(1);",
@@ -355,15 +359,14 @@ makeConverter cfg impl@(Impl _ nm frames) _ =
                                "    while (1) {",
                                "        pptframe_$firstname$_t buf;",
                                "        if (!fread(&buf, sizeof(pptframe_$firstname$_t), 1, in)) {",
-                               "            fclose(out);",
-                               "            exit(0);",
+                               "            goto finish;",
                                "        }",
                                "        switch (buf.ppt_type) {",
                                "        $cases; separator=\"\n        \"$",
                                "        }",
                                "    }",
                                "",
-                               "",
+                               "finish:",
                                "$closes; separator=\"\n\"$",
                                "    return 0;",
                                "}",
@@ -372,8 +375,8 @@ makeConverter cfg impl@(Impl _ nm frames) _ =
                framedecls = map (makeFrameDecl cfg) frames
                cases = map (\(frame, nr) -> makeCase cfg frame nr) $ zip frames [1..]
                opens = map (makeOpenFunction cfg) frames
-               closes = map (\(ImplFrame k _) -> ("    fclose(out_" ++ k ++ ")")) frames
-               outnames = map (\(ImplFrame k _) -> ("out_ " ++ k)) frames
+               closes = map (\(ImplFrame k _) -> ("    fclose(out_" ++ k ++ ");")) frames
+               outnames = map (\(ImplFrame k _) -> ("out_" ++ k)) frames
                arrayTempl = setManyAttrib [("framedecls", framedecls), ("cases", cases), 
                                           ("opens", opens), ("closes", closes), ("outnames", outnames)] t
                (ImplFrame firstname _) = head frames
