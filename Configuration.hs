@@ -30,6 +30,11 @@ implSize c (ImplMember _ t) = memSize c t
             memSize _ IMFloat = 4
             memSize _ IMInt = 4
             memSize _ IMTime = 16
-            memSize _ IMSeqno = 4
+            memSize _ (IMSeqno _) = 4
+            -- It could actually be one, but: (1) it'd only ever be
+            -- padded-in to fill the difference, and (2) we could
+            -- later put in more data in there, such as flags to
+            -- support variable-size elements.
+            memSize _ IMDescriminator = 4
             memSize _ (IMPad n) = n
 

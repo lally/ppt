@@ -1,4 +1,4 @@
-module SIParser ( parseText, commandFile, PadBlock, buildPBs, implement ) where
+module SIParser ( parseText, commandFile, PadBlock, buildPBs, implement, quickParseFile ) where
 
 import Text.ParserCombinators.Parsec (sepBy, try, char, eof, many1,
                                       many, ParseError, digit,
@@ -40,7 +40,7 @@ emitCmd = do { try (char 'C' >> char '+' >> char '+'); return LangCpp }
 ch c = do { SIParser.whiteSpace; x <- char c; SIParser.whiteSpace; return x }
 
 bufferValue = ( SIParser.reserved "default" >> return Nothing ) 
-              <|> do { ds <- many1 digit; return (Just (read ds)) }
+              <|> do { ds <- many1 digit; SIParser.whiteSpace; return (Just (read ds)) }
 
 bufferCmd = do { SIParser.reserved "buffer"
                ; name <- SIParser.identifier
@@ -95,12 +95,17 @@ parseText p input fname = parse (do { SIParser.whiteSpace
                             ; return x
                             }) fname input
 
+quickParseFile :: String -> IO (Either ParseError FullSpecification)
+quickParseFile fname = do text <- readFile fname
+                          return (parseText commandFile text fname)
+
 ------------------------------------------------------------
 -- In-memory layout
 
 
 -- [elements in right now] (current size)
 data PadBlock = PB [ImplMember] Int
+                deriving Show
 
 
 maxSize :: RunConfig -> [ImplMember] -> Int
@@ -139,7 +144,7 @@ sortByAscendingSizes cfg elems =
 --  buildPBs
 --  ========
 
---  'buildPBs' works by first sorting the elements by (increasing)
+--  'buildPBs' works by first sorting the elements by (decreasing)
 -- size, determine the largest item, then tightly-pack (and align)
 -- these objects.  The procedure is not terribly different from what a
 -- compiler normally does, but this way we get exact alignments for
@@ -159,26 +164,6 @@ sortByAscendingSizes cfg elems =
 -- the next-largest pad-block size.  We may have to repeat.  If we run
 -- out, we'll just add in pad blocks.
 
-buildPBs :: RunConfig -> [FrameElement] -> [PadBlock]
-buildPBs cfg elems@(e:es) =  
-         let max a b = if a < b then b else a
-             header = ImplMember Nothing IMSeqno
-             implmems = header : (sortByAscendingSizes cfg (mapElements elems))
-             biggest_elem_sz = max (implSize cfg header) (maxSize cfg implmems)
-             blockify (l, []) = [PB l biggest_elem_sz]
-             blockify (l,r) = ((PB l biggest_elem_sz) : 
-                      blockify (memPrefix cfg r biggest_elem_sz))
-         in
-             blockify (memPrefix cfg implmems biggest_elem_sz)
-
-
-implement :: RunConfig -> FullSpecification -> FullImplementation
-implement cfg spec@(Spec emit (Buffer nm _ _) frames) = 
-          Impl emit nm $ map implFrame frames
-          where implFrame (Frame fname elems) = 
-                    ImplFrame fname $ concatMap breakPBs (buildPBs cfg elems)
-                breakPBs pb@(PB ms _) = ms
-                
 
 -- implement
 -- =========
@@ -204,87 +189,123 @@ implement cfg spec@(Spec emit (Buffer nm _ _) frames) =
 -- constructor.  The predicate takes a second value, and it returns a
 -- new value for that parameter for the next call.
 scanWhile :: (a -> b -> (Bool,b)) -> [a] -> b -> (Int, [a]) -> (Int, [a], [a])
+scanWhile predicate [] init (pcount, phead) = (pcount, phead, [])
+scanWhile predicate [x] init (pcount, phead) = 
+          let (pres, ninit) = predicate x init
+           in if pres then
+                (pcount, (phead ++ [x]), [])
+              else
+                (pcount, phead, [x])
+
 scanWhile predicate xm@(x:xs) init (pcount, phead) =
           let (pres, ninit) = predicate x init
            in if pres then
-                scanWhile predicate xs ninit (pcount+1, phead ++ [x])
+                 scanWhile predicate xs ninit (pcount+1, phead ++ [x])
               else
                  (pcount, phead, xm)
 
 
--- Repeatedly consume a few input elements and merge them into a new
--- output element.  Use 'pred' and its argument 'pinit' to determine
--- which elements go into a block: 'pred' returns true for every
--- element that should go into the block.  'pinit' is the first value
--- of the second argument to 'pred'.  Each call's resulting tuple's
--- second argument will be used as that second argument in subsequent
--- calls.
+-- Repeatedly consume a few input elements and merge them into a new output
+-- element.  Use 'pred' and its argument 'pinit' to determine which elements go
+-- into a block: 'pred' returns true for every element that should go into the
+-- block.  'pinit' is the first value of the second argument to 'pred'.  Each
+-- call's resulting tuple's second argument will be used as that second
+-- argument in subsequent calls.
 blockifyList :: (a -> b -> (Bool, b)) -> ([a] -> c) -> [a] -> b -> [c]
+blockifyList pred merge [] pinit = []
 blockifyList pred merge elems pinit =
-             let (n, head, tail) = blockifyList pred elems pinit
-              in (merge head) ++ (blockifyList pred merge tail)
+             let (n, head, tail) = scanWhile pred elems pinit (0, [])
+              in (merge head) : (blockifyList pred merge tail pinit)
 
--- Convert a frame's elements into a list of pad-blocks.  When
--- determining the final layout, the individual blocks will need IMPad
--- elements added to make them sum up to 'maxSz' bytes large.
-buildPBs :: RunConfig -> Int -> [ImplMember] -> [FrameElement] -> [PadBlock]
-buildPBs cfg maxSz header mems = 
+
+{-
+   We consume ImplMembers and put them into PadBlocks, up to 'align' size each.
+   We return both the list and the last element's length.
+-}
+-- Convert a frame's elements into a list of pad-blocks.  When determining the
+-- final layout, the individual blocks will need IMPad elements added to make
+-- them sum up to 'maxSz' bytes large.
+buildPBs :: RunConfig -> Int -> [ImplMember] -> [FrameElement] -> ([PadBlock], Int)
+buildPBs cfg align header mems = 
          let imems = mapElements mems  
-             elemsBySize = sortByAscendingSizes imems
+             elemsBySize = sortByAscendingSizes cfg imems
+             fitsInPB :: ImplMember -> Int -> (Bool, Int)
              fitsInPB elem budget = 
-                      let remain = budget - implSize elem
+                      let remain = budget - implSize cfg elem
                        in (remain >= 0, remain)
-             makePB elems = let szof (ImplMember _ t) = implSize cfg t
-                                ttlSize = sum $ map szof elems
-                             in PB elems ttlSize
-          in blockifyList fitsInPB makePB (header ++ imems) maxSz
-             
+             makePB :: [ImplMember] -> PadBlock
+             makePB elems = PB elems (sum $ map (implSize cfg) elems)
+             -- build the list of the blocks
+             allBlocks = blockifyList fitsInPB makePB (header ++ imems) align
+             -- now get the last block and see if we can put the footer on there.
+             (PB _ lastblksz) = head $ reverse allBlocks
+          in (allBlocks, lastblksz)
+
 data PBImplFrame = PBImpl String [PadBlock]
                    deriving Show
 
--- Given a list of frames, build padblocks for each, and make them all
--- the same size.  Then see if we can put the footer on the last
--- padblock of all of them.  If not, put them in a new one at the end
--- of all of them.  Finally, insert the padding and put out the final
--- ImplFrames.
+-- Add additional empty PBs to the input PBImplFrame to make it fill 
+padAsNeeded :: Int -> PBImplFrame -> PBImplFrame
+padAsNeeded maxPBs pif@(PBImpl fnm elems) = 
+            PBImpl fnm (elems ++ (take (maxPBs - (length elems)) $ repeat (PB [] 0)))
+
+
+-- insert padding 
+padding 0 = []
+padding ln = [ImplMember Nothing (IMPad ln)]
+
+-- Add padding to each element
+fillElements :: Int -> Int -> [PadBlock] -> [ImplMember] -> [PadBlock]
+fillElements _ _ [] _ = []
+fillElements align footerlen [x@(PB pmems psz)] footer = 
+             if footerlen < (align - psz) then
+                if (align - psz) > footerlen then
+                   let listFront = pmems ++ (padding (align - psz))
+                    in [PB (listFront ++ footer) align]
+                else
+                   [PB (pmems ++ footer) align]
+             else
+                x:[(PB ((padding (align - footerlen)) ++ footer) align)]
+
+fillElements align f (x@(PB pmems psz):xs) footer = 
+             (PB (pmems ++ (padding (align - psz))) align) : (fillElements align f xs footer)
+
+{- Given a configuration, header, footer, and input list of frames, put out a
+   list of implementation frames. 
+
+   (1) get the alignment
+   (2) reorder & sort the packets
+   (3) determine final length
+   (4) pad & add footer.
+   -}
+
+-- Determine the minimum PBs needed to fit the footer in each element.
+minFooterOffset :: RunConfig -> Int -> ([PadBlock], Int) -> Int
+minFooterOffset cfg footerlen (elems, len) = 
+                let elemlen = length elems
+                 in if len >= footerlen then elemlen else (elemlen + 1)
+
 bracketPBs :: RunConfig -> ([ImplMember],[ImplMember]) -> [Frame] -> [ImplFrame]
 bracketPBs cfg (header,footer) elems =
-           let minAlign (Frame _ fe) = maxSize cfg fe
+           let minAlign (Frame _ fe) = maxSize cfg $ mapElements fe
                align = maximum $ map minAlign elems
+               footerlen = sum $ map (implSize cfg) footer
+
+               -- Run the conversion and save the free-size for a later unzip &
+               -- minimum call.
                pbImpl (Frame fnm fe) = 
-                       PBImpl fnm (buildPBs cfg align header fe)
-               pbsOfAll :: [PBImplFrame]
-               pbsOfAll = map pbImpl elems
-               maxNrPBs = maximum $ map (\(PBImpl _ e) -> length e) pbsOfAll
-               padAsNeeded pif@(PBImpl fnm elems) =
-                           let nelems = length elems
-                               empty = PB [] align
-                               blankPBs = repeat empty (maxNrPBs - nelems)
-                            in if nelems < maxNrPBs then
-                                 PBImpl fnm (elems ++ blankPBs)
-                               else
-                                 pif
+                      let (elems, sz) = buildPBs cfg align header fe
+                       in (PBImpl fnm elems, sz)
+               (pbsOfAll, sizes) = unzip $ map pbImpl elems
+               -- given a list of free-sizes elements, look for the longest
+               -- element and see if we could fit the footer in there.
+               minPBs = minimum sizes
                pbPaddedFrames :: [PBImplFrame]
-               pbPaddedFrames = map padAsNeeded pbsOfAll
-               freeSpace (PBImpl _ es) =
-                         let (PB _ free) = tail $ reverse es
-                          in free
-               minFreeSpace = minumum $ map freeSpace pbPaddedFrames
-               padding ln = ImplMember Nothing (IMPad ln)
-               footerlen = sum $ map implSize footer
-               fillElements :: [PadBlock] -> [PadBlock]
-               fillElements (x@(PB pmems psz):xs) = (PB (pmems ++ [(padding (align - psz))]) align) : (fillElements xs)
-               fillElements [x@(PB pmems psz)] = if maxElemSz < footerlen then
-                                                    if align - footerlen > 0 then
-                                                      (PB (pmems ++ ((padding (align - psz)):footer)) align) 
-                                                    else
-                                                      (PB (pmems ++ footer) align) 
-                                                 else
-                                                    [x:(PB ([padding align - footerlen, footer]) align)]
+               pbPaddedFrames = map (padAsNeeded minPBs) pbsOfAll
                paddedPBs (PBImpl fnm pbs) = 
-                         let filledPbs = fillElements pbs
-                             pullImpls (PadBlock ms _) = ms
-                          in ImplFrame fnm (map pullImpls filledPbs)
+                         let filledPbs = fillElements align footerlen pbs footer
+                             pullImpls (PB ms _) = ms
+                          in ImplFrame fnm (concatMap pullImpls filledPbs)
             in map paddedPBs pbPaddedFrames
 
 -- Add IMPad elements to each padblock to make them whole, then
@@ -292,13 +313,13 @@ bracketPBs cfg (header,footer) elems =
 -- (internally-padded) list.  Note that the last element of the
 -- original PB list shouldn't go here, as it needs special processing
 -- to have the footer attached.
-padAndConcat :: RunConfig -> Int -> [PadBlock] -> [ImplMember]
-padAndConcat cfg maxSz footer elems = 
+padAndConcat :: RunConfig -> Int -> [ImplMember] -> [PadBlock] -> [ImplMember]
+padAndConcat cfg sz footer elems = 
              let  -- Pad the block if necessary, but definitely break it out.
-                 padABlock (PadBlock mems memsz) sz = 
+                 padABlock (PB mems memsz) = 
                            if memsz < sz then
-                              let padding = ImplMember Nothing IMPad (sz - memsz)
-                               in mems ++ padding
+                              let padding = ImplMember Nothing (IMPad (sz - memsz))
+                               in mems ++ [padding]
                            else
                               mems
               in concatMap padABlock elems
@@ -308,9 +329,8 @@ padAndConcat cfg maxSz footer elems =
 implement :: RunConfig -> FullSpecification -> FullImplementation
 implement cfg spec@(Spec emit (Buffer nm _ _) frames) = 
           let header | length frames > 1 = 
-                     [ImplMember Nothing IMSeqno, ImplMember Nothing IMDescriminator]
-              header | otherwise = [ImplMember Nothing IMSeqno]
+                     [ImplMember Nothing (IMSeqno SFront), ImplMember Nothing IMDescriminator]
+                     | otherwise = [ImplMember Nothing (IMSeqno SFront)]
               allElems = concatMap (\(Frame _ es) -> es) frames
-              maxElemSz = max $ map implSize allElems
-              footer = ImplMember Nothing IMSeqno
-           in Impl emit nm (bracetPBs cfg (header, footer) frames)
+              footer = [ImplMember Nothing (IMSeqno SBack)]
+           in Impl emit nm (bracketPBs cfg (header, footer) frames)

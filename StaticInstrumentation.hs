@@ -41,11 +41,14 @@ data FullSpecification = Spec EmissionSpec Buffer [Frame]
 specHash :: FullSpecification -> [Word8]
 specHash spec = MD5.hash (map c2w (show spec))
 
+data SeqnoLoc = SFront | SBack
+              deriving Show
+
 data ImplMemberType = IMDouble
                     | IMFloat
                     | IMInt
                     | IMTime -- struct timeval.
-                    | IMSeqno -- added sequence number.
+                    | IMSeqno SeqnoLoc -- added sequence number
                     | IMDescriminator -- type descriminator
                     | IMPad Int -- padding, with byte count
                     deriving Show

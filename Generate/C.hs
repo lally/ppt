@@ -23,8 +23,11 @@ memberName :: ImplMember -> String
 memberName (ImplMember (Just (FrameElement _ nm)) _) = nm
 
 typeBody :: RunConfig -> ImplMember -> Int -> String
-typeBody cfg (ImplMember Nothing IMSeqno) _ = "/* ppt-private */ int ppt_seqno"
-typeBody cfg (ImplMember Nothing (IMPad n)) i= "/* ppt-private */ unsigned char  ppt_pad" ++ (show i) ++ "["++(show n) ++"]"
+typeBody cfg (ImplMember Nothing (IMSeqno SFront)) _ = "/* ppt */ int ppt_seqno_front"
+typeBody cfg (ImplMember Nothing (IMSeqno SBack)) _ = "/* ppt */ int ppt_seqno_back"
+typeBody cfg (ImplMember Nothing IMDescriminator) _ = "/* ppt */ int ppt_type"
+typeBody cfg (ImplMember Nothing (IMPad n)) i = 
+         "/* ppt */ unsigned char  ppt_pad" ++ (show i) ++ "["++(show n) ++"]"
 typeBody cfg (ImplMember (Just fe@(FrameElement FDouble nm)) IMDouble) _ = "double " ++ nm
 typeBody cfg (ImplMember (Just fe@(FrameElement FFloat nm)) IMFloat) _ = "float " ++ nm
 typeBody cfg (ImplMember (Just fe@(FrameElement FInt nm)) IMInt) _ = "int " ++ nm
@@ -48,6 +51,7 @@ makeFrameDecl cfg (ImplFrame frname members) =
                                      "  $names; separator=\";\n  \"$;",
                                      "} pptframe_$nm$_t;",
                                      "",
+                                     "extern pptframe_$nm$_t _ppt_frame_$frame$;",
                                      "#define $macros; separator=\";\n#define \"$",
                                      ""]
                   -- Build our base template
@@ -58,6 +62,11 @@ makeFrameDecl cfg (ImplFrame frname members) =
                   -- And shove them into the template.
                   fullTempl = setManyAttrib [("names", nameValues), ("macros", macroValues)] scalarTempl
                in render fullTempl
+
+makeWriteDecl :: RunConfig -> ImplFrame -> String
+makeWriteDecl cfg (ImplFrame frname members) =
+              "void ppt_write_" ++ frname ++ "_frame()"
+
 
 makeHeader :: RunConfig -> FullImplementation -> String -> String
 makeHeader cfg impl@(Impl _ nm frames) fname =
@@ -72,10 +81,11 @@ makeHeader cfg impl@(Impl _ nm frames) fname =
                     "extern int _ppt_hmem_$nm$;",
                     "extern int _ppt_hsize_$nm$;",
                     "extern unsigned char _ppt_version_$nm$[16];",
+                    "",
                     "#ifdef _cplusplus",
                     "extern \"C\" {",
                     "#endif",
-                    "void ppt_write_$nm$_frame();",
+                    "$writedecls; separator=\";\n\"$;",
                     "#ifdef _cplusplus",
                     "}",
                     "#endif /* #ifdef _cplusplus */",
@@ -84,10 +94,11 @@ makeHeader cfg impl@(Impl _ nm frames) fname =
              t = newSTMP tstr :: StringTemplate String
              -- Build the frame decl templates
              declTemplates = map (makeFrameDecl cfg) frames
+             writeDecls = map (makeWriteDecl cfg) frames
              sym = "INCLUDE_" ++ (map toUpper (replace "." "_" fname))
              -- put in the scalar attributes
              scalarTempl = setManyAttrib [("sym", sym), ("nm",nm)] t
-             fullTempl = setManyAttrib [("framedecls", declTemplates)] scalarTempl
+             fullTempl = setManyAttrib [("framedecls", declTemplates), ("writedecls", writeDecls)] scalarTempl
           in render fullTempl
              
 makeCReader :: RunConfig -> FullSpecification -> FullImplementation -> String -> String
@@ -229,19 +240,19 @@ makeSource c spec impl@(Impl _ nm fs) fname =
 
 isPartOfOutput :: ImplMember -> Bool
 isPartOfOutput (ImplMember (Just _) _) = True
-isPartOfOutput (ImplMember Nothing IMSeqno) = True
+isPartOfOutput (ImplMember Nothing (IMSeqno _)) = True
 isPartOfOutput (ImplMember Nothing _) = False
 
 memberNames :: ImplMember -> [String]
 memberNames (ImplMember (Just (FrameElement _ nm)) IMTime) = [nm ++ ".tv_sec", nm ++ ".tv_usec"]
 memberNames (ImplMember (Just (FrameElement _ nm)) _) = [nm]
-memberNames (ImplMember Nothing IMSeqno) = ["ppt_seqno"]
+memberNames (ImplMember Nothing (IMSeqno _)) = ["ppt_seqno"]
 
 memberFormat :: ImplMember -> [String]
 memberFormat (ImplMember _ IMDouble) = ["%10.8f"]
 memberFormat (ImplMember _ IMFloat)  = ["%10.8f"]
 memberFormat (ImplMember _ IMInt) = ["%d"]
-memberFormat (ImplMember _ IMSeqno) = ["%d"]
+memberFormat (ImplMember _ (IMSeqno _)) = ["%d"]
 memberFormat (ImplMember _ IMTime) = ["%d", "%d"]
 
 makePrintFunction :: RunConfig -> ImplFrame -> String
