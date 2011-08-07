@@ -179,3 +179,27 @@ reading.  Else, stop there, and stop at the previous (max seqno) elem.
 | >            where (d,m) = divMod i 10
 
 
+
+* <2011-07-20 Wed> Next to do
+** DONE Implement the proper layouts & data structures
+** DONE Add the discriminator type
+
+* Attach Command
+** Versions
+   For now, just the latest version against the process, nothing fancy.
+   Later, parse the error message out of ppt-agent, and pull the proper
+   version of the spec out of the repo.
+
+   Eventually, add a 'tag' property to the spec, so that we can give
+   them semantic names (ala git tags).  They could attach to
+   release/version-control release identifiers.  A specialized
+   'current' value can be used (or, we treat the latest version
+   specially) to allow for experimentation.
+
+** Building the listener
+   Hmm, perhaps this is a clang-ism? Or I'll just directly invoke
+   llvm?
+
+   I'm generating the listener, and I should keep LLVM as a dependency
+   that others shouldn't have to worry about.
+

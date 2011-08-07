@@ -340,7 +340,7 @@ makeConverter cfg impl@(Impl _ nm frames) _ =
                                "",
                                "",
                                "int main(int args, char ** argv) {",
-                               "    char namebuf[128];"
+                               "    char namebuf[128];",
                                "    FILE *in, *$outnames; separator=\", *\"$;",
                                "",
                                "    if (args <3) {",

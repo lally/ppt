@@ -1,4 +1,5 @@
-module SIParser ( parseText, commandFile, PadBlock, buildPBs, implement, quickParseFile ) where
+module SIParser ( parseText, commandFile, PadBlock, buildPBs, implement, quickParseFile, 
+       sortByAscendingSizes, mapElements, blockifyList, makePadBlock, bracketPBs, maxSize ) where
 
 import Text.ParserCombinators.Parsec (sepBy, try, char, eof, many1,
                                       many, ParseError, digit,
@@ -107,6 +108,7 @@ quickParseFile fname = do text <- readFile fname
 data PadBlock = PB [ImplMember] Int
                 deriving Show
 
+makePadBlock mems n = PB mems n
 
 maxSize :: RunConfig -> [ImplMember] -> Int
 maxSize _ [] = 0
@@ -218,72 +220,103 @@ blockifyList pred merge elems pinit =
               in (merge head) : (blockifyList pred merge tail pinit)
 
 
-{-
+{- 85 Livingston Ave, Roseland NJ
    We consume ImplMembers and put them into PadBlocks, up to 'align' size each.
    We return both the list and the last element's length.
 -}
 -- Convert a frame's elements into a list of pad-blocks.  When determining the
 -- final layout, the individual blocks will need IMPad elements added to make
 -- them sum up to 'maxSz' bytes large.
-buildPBs :: RunConfig -> Int -> [ImplMember] -> [FrameElement] -> ([PadBlock], Int)
+buildPBs :: RunConfig -> Int -> [ImplMember] -> [FrameElement] -> [PadBlock]
 buildPBs cfg align header mems = 
          let imems = mapElements mems  
              elemsBySize = sortByAscendingSizes cfg imems
+             -- The budget is also an offset counter.
              fitsInPB :: ImplMember -> Int -> (Bool, Int)
              fitsInPB elem budget = 
-                      let remain = budget - implSize cfg elem
+                      let elemSz = implSize cfg elem -- and its alignment
+                          -- Our budget has to be hit for any padding bytes necessary.
+                          remain = budget - elemSz - (budget `mod` elemSz)
                        in (remain >= 0, remain)
+
+             -- simple c'tor for PadBlocks.
              makePB :: [ImplMember] -> PadBlock
              makePB elems = PB elems (sum $ map (implSize cfg) elems)
+
              -- build the list of the blocks
              allBlocks = blockifyList fitsInPB makePB (header ++ imems) align
+
              -- now get the last block and see if we can put the footer on there.
              (PB _ lastblksz) = head $ reverse allBlocks
-          in (allBlocks, lastblksz)
+          in allBlocks
 
-data PBImplFrame = PBImpl String [PadBlock]
-                   deriving Show
 
 -- Add additional empty PBs to the input PBImplFrame to make it fill 
-padAsNeeded :: Int -> PBImplFrame -> PBImplFrame
-padAsNeeded maxPBs pif@(PBImpl fnm elems) = 
-            PBImpl fnm (elems ++ (take (maxPBs - (length elems)) $ repeat (PB [] 0)))
+-- padAsNeeded :: Int -> PBImplFrame -> PBImplFrame
+-- padAsNeeded maxPBs pif@(PBImpl fnm elems _ _) = 
+--             PBImpl fnm (elems ++ (take (maxPBs - (length elems)) $ repeat (PB [] 0)))
 
 
 -- insert padding 
 padding 0 = []
-padding ln = [ImplMember Nothing (IMPad ln)]
+padding ln | ln > 0 = [ImplMember Nothing (IMPad ln)]
+           | otherwise = fail "Negative padding"
 
--- Add padding to each element
-fillElements :: Int -> Int -> [PadBlock] -> [ImplMember] -> [PadBlock]
-fillElements _ _ [] _ = []
-fillElements align footerlen [x@(PB pmems psz)] footer = 
-             if footerlen < (align - psz) then
-                if (align - psz) > footerlen then
-                   let listFront = pmems ++ (padding (align - psz))
-                    in [PB (listFront ++ footer) align]
-                else
-                   [PB (pmems ++ footer) align]
-             else
-                x:[(PB ((padding (align - footerlen)) ++ footer) align)]
+-- Determine how much up-front padding is needed for a member at a
+-- given offset to align it properly
+aligningPadding :: RunConfig -> ImplMember -> Int -> Int
+aligningPadding cfg mem@(ImplMember fe ty) offset = offset `mod` (implSize cfg mem)
 
-fillElements align f (x@(PB pmems psz):xs) footer = 
-             (PB (pmems ++ (padding (align - psz))) align) : (fillElements align f xs footer)
+-- Apply inline padding to a block.  Return the padded block, and the
+-- amount of free space at the end.
+padABlock :: RunConfig -> Int -> PadBlock -> (PadBlock, Int)
+padABlock cfg align block@(PB members size) = 
+          let insertPadding offset [] = ([], align - offset)
+              insertPadding offset ((mem@(ImplMember fe ty)):mems) =
+                            let padAmount = aligningPadding cfg mem offset
+                                sz = implSize cfg mem
+                                (tail, remain) = insertPadding (offset + (padAmount + sz)) mems
+                             in ((padding padAmount) ++ [mem] ++ tail, remain)
+              (members, remainder) = insertPadding 0 members
+           in (PB (members) align, remainder)
+
+-- Given a paremeter k, tail-pad the first k elements of an input list
+-- of pad-blocks.  If k > length(input_list), add all-padding blocks
+-- to make it of proper length, putting a pad-and-footer block at the end.
+-- If k < length(input_list), put the footer at the end of the last block.
+tailPadAndAppend :: RunConfig -> Int -> Int -> [ImplMember] -> [PadBlock] -> [PadBlock]
+tailPadAndAppend cfg align 0 footer [] = 
+                 let footerlen = sum $ map (implSize cfg) footer
+                  in [PB ((padding (align - footerlen)) ++ footer) align]
+tailPadAndAppend cfg align 1 footer [x@(PB mems sz)] = 
+                 let footerlen = sum $ map (implSize cfg) footer
+                  in [PB (mems ++ (padding (sz - footerlen)) ++ footer) align]
+tailPadAndAppend cfg align k footer [] = 
+                 (PB (padding align) align):(tailPadAndAppend cfg align (k-1) footer [])
+tailPadAndAppend cfg align k footer ((x@(PB mems sz)):remain) = 
+                 (PB (mems ++ (padding (align - sz))) align):(tailPadAndAppend cfg align (k-1) footer remain)
+                 
+-- The stuff above is the new, clear idea of a two-pass system:
+-- Pass 1: Internal padding and tail-freespace determination
+-- (here, determine the maximum offset of the footer)
+-- Pass 2: tail-padding, list padding (add full-padding blocks), footer append
+-- Profit!
+
+-- stuff below should be rewritten to work with this stuff above, and
+-- will need re-jiggering on the way to make it work.
 
 {- Given a configuration, header, footer, and input list of frames, put out a
    list of implementation frames. 
-
-   (1) get the alignment
-   (2) reorder & sort the packets
-   (3) determine final length
-   (4) pad & add footer.
    -}
 
+
+-- A temporary record type, used for bookkeeping the pad-blocks that
+-- contain the members: PBImpl (name of frame) (pad blocks) (length of
+-- pad blocks) (space at end of last pad block)
+data PBImplFrame = PBImpl String [PadBlock] Int Int
+                   deriving Show
+
 -- Determine the minimum PBs needed to fit the footer in each element.
-minFooterOffset :: RunConfig -> Int -> ([PadBlock], Int) -> Int
-minFooterOffset cfg footerlen (elems, len) = 
-                let elemlen = length elems
-                 in if len >= footerlen then elemlen else (elemlen + 1)
 
 bracketPBs :: RunConfig -> ([ImplMember],[ImplMember]) -> [Frame] -> [ImplFrame]
 bracketPBs cfg (header,footer) elems =
@@ -291,22 +324,28 @@ bracketPBs cfg (header,footer) elems =
                align = maximum $ map minAlign elems
                footerlen = sum $ map (implSize cfg) footer
 
-               -- Run the conversion and save the free-size for a later unzip &
-               -- minimum call.
                pbImpl (Frame fnm fe) = 
-                      let (elems, sz) = buildPBs cfg align header fe
-                       in (PBImpl fnm elems, sz)
-               (pbsOfAll, sizes) = unzip $ map pbImpl elems
-               -- given a list of free-sizes elements, look for the longest
-               -- element and see if we could fit the footer in there.
-               minPBs = minimum sizes
-               pbPaddedFrames :: [PBImplFrame]
-               pbPaddedFrames = map (padAsNeeded minPBs) pbsOfAll
-               paddedPBs (PBImpl fnm pbs) = 
-                         let filledPbs = fillElements align footerlen pbs footer
-                             pullImpls (PB ms _) = ms
-                          in ImplFrame fnm (concatMap pullImpls filledPbs)
-            in map paddedPBs pbPaddedFrames
+                      let elems = buildPBs cfg align header fe
+                       in (fnm, elems)
+
+               padFrame :: (String, [PadBlock]) -> PBImplFrame
+               padFrame (fname, felems) =
+                        let (padded, frees) = unzip $ map (padABlock cfg align) felems
+                            tailFree = last frees
+                         in (PBImpl fname padded (length padded) tailFree)
+
+               pbPaddedFrames = map (padFrame . pbImpl) elems
+
+               kValue (PBImpl _ _ blocks freebytes) | freebytes >= footerlen = blocks
+                                                         | otherwise = blocks + 1
+               
+               k = maximum $ map kValue pbPaddedFrames
+
+               finishPB (PBImpl fname felems sz free) =
+                        let blocks = tailPadAndAppend cfg align k footer felems
+                            pullImpls (PB ms _) = ms
+                         in ImplFrame fname (concatMap pullImpls blocks)
+            in map finishPB pbPaddedFrames
 
 -- Add IMPad elements to each padblock to make them whole, then
 -- concatenate their elements together into the full

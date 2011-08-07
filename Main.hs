@@ -2,6 +2,7 @@ module Main where
 
 import Configuration (RunConfig, cfgTarget)
 import SIParser as Parse
+import Agent
 import StaticInstrumentation as Inst
 import Storage as S
 import Generate as Gen
@@ -28,6 +29,7 @@ runCommand args cfg = do
     case head args of
       "gen" -> Gen.generate (tail args) cfg
       "generate" -> Gen.generate (tail args) cfg
+      "attach" -> Agent.attach (tail args) cfg
       "?" -> showHelp
       "help" -> showHelp
       "ret" -> Gen.checkout (tail args) cfg

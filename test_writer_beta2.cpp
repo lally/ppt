@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <time.h>
 #include <limits.h>
+#include <assert.h>
 
 int mid;
 void *key_mem;
@@ -65,20 +66,20 @@ int main(int args, char **argv) {
     // and just start writing.
     //
 
-    printf ("sizeof pptframe_beta2_t: %d bytes\n",
-            sizeof (pptframe_beta2_t));
+    // printf ("sizeof pptframe_beta2_t: %d bytes\n",
+    //         sizeof (pptframe_beta2_t));
 
     /*    if (args < 2) {
-        printf("usage: %s <size> [count] \n", argv[0]);
-        puts  ("      size: number of frames in the buffer");
-	puts  ("      count: if present, how many times to fill the array before stopping");
-        exit(1);
-	} */
+          printf("usage: %s <size> [count] \n", argv[0]);
+          puts  ("      size: number of frames in the buffer");
+          puts  ("      count: if present, how many times to fill the array before stopping");
+          exit(1);
+          } */
 
     size = 10; //atoi(argv[1]);
     int iter_max = -1;
     if (args > 2) {
-       iter_max= atoi(argv[2]);
+        iter_max= atoi(argv[2]);
     }
 
     if (size < 1) {
@@ -97,20 +98,20 @@ int main(int args, char **argv) {
 #define SHM_W 00200
 #endif  
   
-/*    mid = shmget(key, size * sizeof (pptframe_beta2_t), 
-                 IPC_CREAT | IPC_EXCL | SHM_R | SHM_W);
-    if (mid == -1) {
-        perror("shmget");
-        exit(1);
-    }
+    /*    mid = shmget(key, size * sizeof (pptframe_beta2_t), 
+          IPC_CREAT | IPC_EXCL | SHM_R | SHM_W);
+          if (mid == -1) {
+          perror("shmget");
+          exit(1);
+          }
 
-    printf ("handle = %d, size = %d elements, %d bytes\n",
-            mid, size, size * sizeof (pptframe_beta2_t));
-    signal(SIGINT, kill);
-    signal(SIGKILL, kill);
+          printf ("handle = %d, size = %d elements, %d bytes\n",
+          mid, size, size * sizeof (pptframe_beta2_t));
+          signal(SIGINT, kill);
+          signal(SIGKILL, kill);
 
 
-*/
+    */
     double whole_interval = 1000.0 + (1000.0 * new_freq());
     double interval = whole_interval / 31.25;
 
@@ -121,18 +122,32 @@ int main(int args, char **argv) {
     int counter = 0;
 
     // a little bit of a hack.
-//    _ppt_hmem_beta2 = mid;
+    //    _ppt_hmem_beta2 = mid;
 
     int iter_count = 0;
     while (iter_count != iter_max) {
         // when wrapping seqno, skip zero.
-        WRITE_BETA2_COUNT(counter);
+        if (counter & 1) {
+            WRITE_FRAMECOUNT_COUNT(counter);
+            WRITE_FRAMECOUNT_XI(counter * 2);
+            timeval t;
+            gettimeofday(&t, 0);
+            WRITE_FRAMECOUNT_START(t);
+            t.tv_sec += 1;
+            WRITE_FRAMECOUNT_END(t);
+            WRITE_FRAMECOUNT_COUNT2(counter+1);
+            ppt_write_framecount_frame();
+        } else {
+            WRITE_XS_XI(counter);
+            ppt_write_xs_frame();
+        }
         counter++;
-        ppt_write_beta2_frame();
         usleep((useconds_t) (1000.0 * interval));
         gettimeofday(&now, 0);
 
-	if (iter_count++ < 0) {
+        assert(_ppt_frame_framecount.ppt_type == 1);
+        assert(_ppt_frame_xs.ppt_type == 2);
+        if (iter_count++ < 0) {
             iter_count = 0;
         }
    

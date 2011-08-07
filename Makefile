@@ -38,6 +38,6 @@ dummy_client: agent/test/dummy_client.o
 ppt-agent: agent/driver.o agent/attach.o agent/linux/linux-agent.o 
 	g++ -g -o $@ $^ -lelf
 
-ppt: Configuration.hs Generate.hs Generate/C.hs Listener.hs Main.hs SIParser.hs StaticInstrumentation.hs Storage.hs
+ppt: Agent.hs Configuration.hs Generate.hs Generate/C.hs Listener.hs Main.hs SIParser.hs StaticInstrumentation.hs Storage.hs
 	ghc -o ppt --make Main.hs
 
