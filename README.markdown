@@ -27,19 +27,17 @@ INSTALLATION
 The requirements for building ppt aren't trivial.  Sorry.
 
 You'll need:
-  ghc - The Glorious Glasgow Haskell Compilation System  6.12+
-  llvm - The Low-Level Virtual Machine (tested with version 0.8)
-  and a variety of add-on packages for ghc:
-   - HStringTemplate
-   - llvm (a haskell wrapper API for llvm above) (tested version 0.9.0.1)
-   - Crypto
-   - MissingH
+-  `ghc`: The Glorious Glasgow Haskell Compilation System  6.12+
+-  `llvm`: The Low-Level Virtual Machine (tested with version 0.8)
+    and a variety of add-on packages for ghc:
+   - `HStringTemplate`
+   - `llvm` (a haskell wrapper API for llvm above) (tested version 0.9.0.1)
+   - `Crypto`
+   - `MissingH`
 
   I strongly recommend starting with the Haskell Platform 
   (http://hackage.haskell.org/platform/) and then using 
-  'cabal install' to get the add-on packages.
-
-  llvm 
+  `cabal install` to get the add-on packages.
 
 CONSTRAINTS
 -----------
