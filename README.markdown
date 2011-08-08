@@ -125,8 +125,8 @@ See test_writer_beta2.cpp for full details, but the gist is:
 
 3. When ready, write out the frame:
 
-    ppt_write_framecount_frame()
-    ppt_write_xs_frame()
+            ppt_write_framecount_frame()
+            ppt_write_xs_frame()
 
 4. Link against the generated base source (`"beta2.c"` here)
 
@@ -173,13 +173,12 @@ But that's the worst of it.
 Finally, build and use the generated beta2_convert.c program to make CSVs of your data:
 
     g++ -o beta2_convert beta2_convert.c
-
-./beta2_convert out.buf some_prefix
+    ./beta2_convert out.buf some_prefix
 
 And you'll get two files:
 
-some_prefix_framecount.csv
-some_prefix_xs.csv
+    some_prefix_framecount.csv
+    some_prefix_xs.csv
 
 It'll have one column per field (two for 'time', tv_sec and tv_usec), and one
 more sequence number up front.  That sequence number indicates order and lost
