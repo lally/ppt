@@ -36,7 +36,7 @@ typeBody cfg (ImplMember (Just fe@(FrameElement FTime nm)) IMTime) _ = "struct t
 
 makeMacro :: String -> ImplMember -> String
 makeMacro frame (ImplMember (Just (FrameElement _ mem)) _) = 
-          let tstr = "WRITE_$ufr$_$umem$(x) _ppt_frame_$frame$.$mem$ = (x)"
+          let tstr = "WRITE_$ufr$_$umem$(_PARAM_) _ppt_frame_$frame$.$mem$ = (_PARAM_)"
               t = newSTMP tstr :: StringTemplate String
               u = setManyAttrib [("mem", mem), ("frame", frame), 
                                  ("ufr", (map toUpper frame)), ("umem", (map toUpper mem))] t
