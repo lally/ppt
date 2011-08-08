@@ -2,7 +2,7 @@ module SIParser ( parseText, commandFile, PadBlock(PB), buildPBs, implement, qui
        sortByAscendingSizes, mapElements, blockifyList, makePadBlock, bracketPBs, maxSize,
        tailPadAndAppend, PBImplFrame(PBImpl), padABlock, padding, aligningPadding, scanWhile ) where
 
-import Text.ParserCombinators.Parsec (sepBy, try, char, eof, many1,
+import Text.ParserCombinators.Parsec (sepBy1, try, char, eof, many1,
                                       many, ParseError, digit,
                                       string, (<|>), (<?>), GenParser)
 import Text.ParserCombinators.Parsec.Language (javaStyle)
@@ -31,6 +31,7 @@ symbol    = P.symbol lexer
 natural   = P.natural lexer
 parens    = P.parens lexer
 semi      = P.semi lexer
+comma     = P.comma lexer
 identifier= P.identifier lexer
 reserved  = P.reserved lexer
 reservedOp= P.reservedOp lexer
@@ -66,9 +67,9 @@ elementType = ( SIParser.reserved "double" >> return FDouble )
               <?> "type name"
 
 element = do { typ <- elementType
-             ; name <- SIParser.identifier
+             ; names <- SIParser.identifier `sepBy1` SIParser.comma
              ; SIParser.semi
-             ; return (FrameElement typ name)
+             ; return (map (\n -> FrameElement typ n) names)
              }
 
 frameSpec = do { SIParser.reserved "frame"
@@ -76,7 +77,7 @@ frameSpec = do { SIParser.reserved "frame"
                ; ch '{'
                ; elem <- many element
                ; ch '}'
-               ; return (Frame name elem)
+               ; return (Frame name (concat elem))
                }
 
 type Parser t = GenParser Char () t

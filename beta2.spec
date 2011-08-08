@@ -12,8 +12,7 @@ buffer beta2 128 4
 frame framecount {
     int count;
     double xi;
-    time start;
-    time end;
+    time start, end;
     int count2;
 }
 
