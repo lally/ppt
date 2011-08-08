@@ -27,17 +27,24 @@ INSTALLATION
 The requirements for building ppt aren't trivial.  Sorry.
 
 You'll need:
--  `ghc`: The Glorious Glasgow Haskell Compilation System  6.12+
--  `llvm`: The Low-Level Virtual Machine (tested with version 0.8)
-    and a variety of add-on packages for ghc:
-   - `HStringTemplate`
-   - `llvm` (a haskell wrapper API for llvm above) (tested version 0.9.0.1)
-   - `Crypto`
-   - `MissingH`
 
-  I strongly recommend starting with the Haskell Platform 
-  (http://hackage.haskell.org/platform/) and then using 
-  `cabal install` to get the add-on packages.
+ -  `ghc`: The Glorious Glasgow Haskell Compilation System  6.12+
+
+ -  `llvm`: The Low-Level Virtual Machine (tested with version 0.8)
+     and a variety of add-on packages for ghc:
+
+    - `HStringTemplate`
+
+    - `llvm` (a haskell wrapper API for llvm above) (tested version 0.9.0.1)
+
+    - `Crypto`
+
+    - `MissingH`
+
+
+I strongly recommend starting with the Haskell Platform 
+(http://hackage.haskell.org/platform/) and then using 
+`cabal install` to get the add-on packages.
 
 CONSTRAINTS
 -----------
@@ -51,7 +58,7 @@ HOW TO USE
 
 ### SETUP
 
-Run 'ppt init' to quickly make a ./.ppt directory.
+Run `ppt init` to quickly make a `./.ppt` directory.
 
 ### FILE FORMAT
 
@@ -83,38 +90,45 @@ Create a file named 'beta2.spec':
 
 While we're just using 'count' here, any number of elements can be in here,
 with the following types: int, float, double, and time.  The first three map to
-their C equivalents, the last maps to a struct timeval (handy for
-gettimeofday()).  Currently, the 'emit C' is required, but we only support C
+their C equivalents, the last maps to a `struct timeval` (handy for
+`gettimeofday()`).  Currently, the 'emit C' is required, but we only support C
 source generation.  They will be C++ compatible.
 
 ### GENERATION
 
-Then call 'ppt generate beta2.spec'.  It will generate (internally, in .ppt/) a
+Then call `ppt generate beta2.spec`.  It will generate (internally, in `.ppt/`) a
 header file, source code, and a llvm bitcode generator program.  We currently 
 generate C and LLVM bitcode versions of the listener program.  Either way, you'll
 have to build it yourself.
 
 ### RETRIEVAL
 
-Then, call 'ppt retrieve beta2.spec'.  This will copy the files generated into
+Then, call `ppt retrieve beta2.spec`.  This will copy the files generated into
 the local directory.
 
 ### INSTRUMENTATION
 
 See test_writer_beta2.cpp for full details, but the gist is:
-(1) #include the generated header ("beta2.h" here)
-(2) Use the generated macros.  The macros are named as such:
+
+1. `#include` the generated header (`"beta2.h"` here)
+
+2. Use the generated macros.  The macros are named as such:
+
             WRITE_FRAMECOUNT_COUNT();
             WRITE_FRAMECOUNT_XI();
             WRITE_FRAMECOUNT_START();
             WRITE_FRAMECOUNT_END();
             WRITE_FRAMECOUNT_COUNT2();
             WRITE_XS_XI();
+
     Just feed a parameter of the proper type (as we mentioned above) to it as the only arg.
-(3) When ready, write out the frame:
+
+3. When ready, write out the frame:
+
     ppt_write_framecount_frame()
     ppt_write_xs_frame()
-(4) Link against the generated base source ("beta2.c" here)
+
+4. Link against the generated base source (`"beta2.c"` here)
 
 Note that the macros and write-functions use static instances of the frame
 types (e.g.  there's a static instance of the struct generated for 'framecount'
@@ -132,9 +146,9 @@ Next, build your listener.  We'll use the C version:
 
     gcc -o beta2_listen beta2_listen.c
 
-Note that the name has to be beta2_listen (namely, the buffer name with _listen
+Note that the name has to be `beta2_listen` (namely, the buffer name with `_listen`
 added to the end.  It has to be in the current directory (hey, this is all
-rather hackish, don't act surprised) when you call ppt below.
+rather hackish, don't act surprised) when you call `ppt` below.
 
 ### MEASUREMENT
 
