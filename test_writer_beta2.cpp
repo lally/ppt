@@ -37,11 +37,6 @@ double new_freq () {
 void kill(int sig) {
     printf("signal %d: Trying to die on shm id %d\n", sig, mid);
     shmdt(key_mem);
-    /*  struct shmid_ds st;
-        do {
-        sleep(1);
-        shmctl(mid, IPC_STAT, &st);
-        } while (st.shm_nattch > 0); */
     int ret = shmctl(mid, IPC_RMID, 0);
     if (ret) {
         perror("shmctl(IPC_RMID)");
@@ -60,21 +55,6 @@ int main(int args, char **argv) {
     //    metrics_beta1_seqno_t max_val = INT_MAX;
     int size;
     int key;
-
-    //
-    // Step 1: setup the shared memory, print out its parameters, and
-    // and just start writing.
-    //
-
-    // printf ("sizeof pptframe_beta2_t: %d bytes\n",
-    //         sizeof (pptframe_beta2_t));
-
-    /*    if (args < 2) {
-          printf("usage: %s <size> [count] \n", argv[0]);
-          puts  ("      size: number of frames in the buffer");
-          puts  ("      count: if present, how many times to fill the array before stopping");
-          exit(1);
-          } */
 
     size = 10; //atoi(argv[1]);
     int iter_max = -1;
@@ -98,20 +78,6 @@ int main(int args, char **argv) {
 #define SHM_W 00200
 #endif  
   
-    /*    mid = shmget(key, size * sizeof (pptframe_beta2_t), 
-          IPC_CREAT | IPC_EXCL | SHM_R | SHM_W);
-          if (mid == -1) {
-          perror("shmget");
-          exit(1);
-          }
-
-          printf ("handle = %d, size = %d elements, %d bytes\n",
-          mid, size, size * sizeof (pptframe_beta2_t));
-          signal(SIGINT, kill);
-          signal(SIGKILL, kill);
-
-
-    */
     double whole_interval = 1000.0 + (1000.0 * new_freq());
     double interval = whole_interval / 31.25;
 
@@ -120,9 +86,6 @@ int main(int args, char **argv) {
 
     double value = 0.0;
     int counter = 0;
-
-    // a little bit of a hack.
-    //    _ppt_hmem_beta2 = mid;
 
     int iter_count = 0;
     while (iter_count != iter_max) {

@@ -47,22 +47,89 @@ store and frame-save.
 
 HOW TO USE
 ----------
-Create a file (we use the extension .spec) that looks like this:
 
+SETUP
+
+Run 'ppt init' to quickly make a ./.ppt directory.
+
+FILE FORMAT
+
+Create a file named 'beta2.spec':
 --
-emit C
+// A test file for syntax & code generation.
 
-frame beta1 {
-  int count;
+// We can emit "C" or "C++", only C's tested, but it compiles in C++.
+emit C
+// syntax: "buffer" <buffer name> <bufsz> <writerate>
+// This buffer's named "beta2", at runtime,  the default values
+// are 128 elements, expecting a write rate of 4 Hz. (e.g. 32 seconds
+// worth of data in the buffer simultaneously).
+buffer beta2 128 4
+
+
+frame framecount {
+    int count;
+    double xi;
+    time start;
+    time end;
+    int count2;
+}
+
+frame xs {
+  double xi;
 }
 --
 
 While we're just using 'count' here, any number of elements can be in here, with
 the following types: int, float, double, and time.  The first three map to their C
-equivalents, the last (currently) maps to a struct timeval (handy for gettimeofday()).
+equivalents, the last maps to a struct timeval (handy for gettimeofday()).
 Currently, the 'emit C' is required, but we only support C source generation.  
 They will be C++ compatible.
 
-Then call 'ppt generate <thatfile>'.  It will generate (internally, in .ppt/) a
-header file, source code, and a llvm bitcode generator program.
+GENERATION
+
+Then call 'ppt generate beta2.spec'.  It will generate (internally, in .ppt/) a
+header file, source code, and a llvm bitcode generator program.  We currently 
+generate C and LLVM bitcode versions of the listener program.  Either way, you'll
+have to build it yourself.
+
+RETRIEVAL
+
+Then, call 'ppt retrieve beta2.spec'.  This will copy the files generated into
+the local directory.
+
+INSTRUMENTATION
+
+See test_writer_beta2.cpp for full details, but the gist is:
+(1) #include the generated header ("beta2.h" here)
+(2) Use the generated macros.  The macros are named as such:
+            WRITE_FRAMECOUNT_COUNT();
+            WRITE_FRAMECOUNT_XI();
+            WRITE_FRAMECOUNT_START();
+            WRITE_FRAMECOUNT_END();
+            WRITE_FRAMECOUNT_COUNT2();
+            WRITE_XS_XI();
+    Just feed a parameter of the proper type (as we mentioned above) to it as the only arg.
+(3) When ready, write out the frame:
+    ppt_write_framecount_frame()
+    ppt_write_xs_frame()
+(4) Link against the generated base source ("beta2.c" here)
+
+Note that the macros and write-functions use static instances of the frame types (e.g.
+there's a static instance of the struct generated for 'framecount' and for 'xs').  For
+multithreaded code, you can do your own thread-locking, or, much more appropriately,
+bug me to finalize the design for ppt to generate multithreaded code.  If your write
+rate is low enough that you don't care about contention (e.g. < 1KHz), and have all your 
+data local and ready-to-go, the thread-locking approach should be good for a handful (e.g. < 10)
+of contending threads.
+
+
+PREPARATION
+
+Next, build your listener.  We'll use the C version:
+gcc -o beta2_listen beta2_listen.c
+
+Note that the name has to be beta2_listen (namely, the buffer name with _listen added
+to the end.
+
 
