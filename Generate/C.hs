@@ -48,17 +48,18 @@ makeFrameHeaderDecl cfg (ImplFrame frname members) =
                                      "//",
                                      "// Frames for $nm$",
                                      "typedef struct ppt_tag_struct_$nm$ {",
+                                     "  // $nrnames$ members",
                                      "  $names; separator=\";\n  \"$;",
                                      "} pptframe_$nm$_t;",
                                      "",
                                      "extern pptframe_$nm$_t _ppt_frame_$nm$;",
                                      "#define $macros; separator=\"\n#define \"$",
                                      ""]
-                  -- Build our base template
-                  scalarTempl = setManyAttrib [("nm", frname)] $ newSTMP templstr
                   -- Assemble $names and $macros.
                   nameValues = (map (\(a,b) -> typeBody cfg a b) $ zip members [1..]) :: [String]
                   macroValues = map (makeMacro frname) $ filter hasFrameElement members
+                  -- Build our base template
+                  scalarTempl = setManyAttrib [("nm", frname), ("nrnames", show (length nameValues))] $ newSTMP templstr
                   -- And shove them into the template.
                   fullTempl = setManyAttrib [("names", nameValues), ("macros", macroValues)] scalarTempl
                in render fullTempl
@@ -207,6 +208,7 @@ makeSource c spec impl@(Impl _ nm fs) fname =
                                "#include <sys/ipc.h>",
                                "#include <sys/shm.h>",
                                "#include <string.h>",
+                               "#include <stdio.h>",
                                "",
                                "#ifndef __GNUC__",
                                "#define GCC_VERSION 0",
@@ -228,17 +230,17 @@ makeSource c spec impl@(Impl _ nm fs) fname =
                                "int _ppt_hsize_$nm$;",
                                "unsigned char _ppt_version_$nm$[16] = {$vbytes; separator=\", \"$};",
                                "",
-                               "void ppt_write_$first$_frame(pptframe_$first$_t *src) {",
-                               "  static int ppt_$nm$_seqno;",
+                               "void ppt_write_$nm$_frame(pptframe_$first$_t *src) {",
+                               "  static int ppt_$nm$_seqno=1;",
                                "  if (_ppt_hmem_$nm$) {",
                                "      if (s_start) {",
-                               "          src->ppt_seqno = 0;",
+                               "          s_cur->ppt_seqno = 0;",
                                "          __sync_synchronize(); // gcc builtin",
                                "          memcpy(s_cur, src, sizeof(pptframe_$first$_t));",
                                "          __sync_synchronize(); // gcc builtin",
                                "          if (++ppt_$nm$_seqno < 0) { ppt_$nm$_seqno = 1; }",
-                               "          s_cur->ppt_seqno_back = _ppt_frame_$first$.ppt_seqno;",
-                               "          s_cur->ppt_seqno = _ppt_frame_$first$.ppt_seqno;",
+                               "          s_cur->ppt_seqno_back = ppt_$nm$_seqno;",
+                               "          s_cur->ppt_seqno = ppt_$nm$_seqno;",
                                "          s_cur++;",
                                "          if (s_cur == s_end) { s_cur = s_start; }",
                                "      } else {",
@@ -249,6 +251,7 @@ makeSource c spec impl@(Impl _ nm fs) fname =
                                "              || ((s_start = (pptframe_$first$_t *) shmat(h, 0, 0600))) "
                                    ++ "== (pptframe_$first$_t *) -1) {",
                                "              _ppt_hmem_$nm$ = 0;",
+                               "              perror(\"shmat for $nm$\");",
                                "              return;  // abort attach.",
                                "          }",
                                "          s_end = s_start + (buf.shm_segsz / sizeof(pptframe_$first$_t));",
@@ -260,20 +263,28 @@ makeSource c spec impl@(Impl _ nm fs) fname =
                                "  }",
                                "}",
                                "",
-                               "$otherWriteDecls; separator=\"\n\n\"$",
+                               "#ifdef _cplusplus",
+                               "extern \"C\" {",
+                               "#endif",
+                               "",
+                               "$writeDecls; separator=\"\n\n\"$",
+                               "",
+                               "#ifdef _cplusplus",
+                               "}",
+                               "#endif",
                                ""]
                t = newSTMP tstr ::StringTemplate String
                ver_bytes = map show $ specHash spec
                (ImplFrame first _) = head fs
-               makeWriteDecl (ImplFrame nm _) = 
-                             "void ppt_write_" ++ nm ++ "_frame(pptframe_" ++ nm ++ "_t *src) {\n"
-                             ++ "    ppt_write_" ++ first ++ "_frame((pptframe_" ++ first ++ "_t*) src);\n"
-                             ++ "}\n"
-               writeDecls = map makeWriteDecl $ tail fs
                makeTypeDecl (ImplFrame nm _) ty =
                             "pptframe_" ++ nm ++ "_t _ppt_frame_" ++ nm ++ " = { 0, " ++ (show ty) ++ " }"
+               makeWriteDecl (ImplFrame fnm _) = 
+                             "void ppt_write_" ++ fnm ++ "_frame() {\n"
+                             ++ "    ppt_write_" ++ nm ++ "_frame((pptframe_" ++ first ++ "_t*) &_ppt_frame_" ++ fnm ++ ");\n"
+                             ++ "}\n"
+               writeDecls = map makeWriteDecl fs
                typeDecls = map (\(f,t) -> makeTypeDecl f t) $ zip fs [1..]
-               arrayTempl = setManyAttrib [("vbytes", ver_bytes), ("otherWriteDecls", writeDecls), 
+               arrayTempl = setManyAttrib [("vbytes", ver_bytes), ("writeDecls", writeDecls), 
                                           ("typeDecls", typeDecls)] t
                scalarTempl = setManyAttrib [("fname", fname), ("nm", nm), ("first", first)] arrayTempl
            in render scalarTempl
@@ -383,4 +394,7 @@ makeConverter cfg impl@(Impl _ nm frames) _ =
            in render $ setManyAttrib [("nm", nm), ("firstname", firstname)] arrayTempl
 
 emitC :: RunConfig -> FullSpecification -> FullImplementation -> String -> (String, String, String, String)
-emitC cfg spec impl fname = (makeHeader cfg impl fname, makeSource cfg spec impl fname, makeConverter cfg impl fname, makeCReader cfg spec impl fname)
+emitC cfg spec impl fname = (makeHeader cfg impl fname, 
+                             makeSource cfg spec impl fname, 
+                             makeConverter cfg impl fname, 
+                             makeCReader cfg spec impl fname)
