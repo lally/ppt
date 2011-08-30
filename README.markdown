@@ -1,8 +1,8 @@
-
 Using PPT
 =========
 
-Lally Singh (lally@vt.edu)
+Lally Singh (lally.singh@gmail.com)
+
 BSD License
 
 PURPOSE
