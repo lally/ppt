@@ -53,6 +53,11 @@ The primary frame data storage is a global variable, a structure
 optimized to minimize the number of cache lines read per measurement
 store and frame-save.
 
+SUPPORT
+-------
+
+No promises, but I'll help if I can.  Hit me up.
+
 HOW TO USE
 ----------
 
