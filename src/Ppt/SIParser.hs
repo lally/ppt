@@ -35,6 +35,7 @@ comma     = P.comma lexer
 identifier= P.identifier lexer
 resvd  = P.reserved lexer
 reservedOp= P.reservedOp lexer
+ch = char
 
 emitCmd = do { try (char 'C' >> char '+' >> char '+'); return LangCpp }
           <|> do { string "C" >> return LangC }
@@ -68,7 +69,7 @@ elementType = ( resvd "double" >> return FDouble )
 element = do { typ <- elementType
              ; names <- identifier `sepBy1` comma
              ; semi
-             ; return (map (\n -> FrameElement typ n) names)
+             ; return (map (\n -> SingleElement typ n) names)
              }
 
 frameSpec = do { resvd "frame"
@@ -131,7 +132,7 @@ memPrefix cfg ms n = memPrefix' ms n []
 
 mapElements :: [FrameElement] -> [ImplMember]
 mapElements xs = map mapElement xs
-            where mapElement e@(FrameElement t n) =
+            where mapElement e@(SingleElement t n) =
                              ImplMember (Just e) (mapType t)
                   mapType FDouble = IMDouble
                   mapType FFloat = IMFloat

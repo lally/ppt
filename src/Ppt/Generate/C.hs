@@ -18,10 +18,9 @@ import Text.Printf (printf)
 hasFrameElement :: ImplMember -> Bool
 hasFrameElement (ImplMember (Just _) _) = True
 hasFrameElement (ImplMember Nothing _) = False
-         
 
 memberName :: ImplMember -> String
-memberName (ImplMember (Just (FrameElement _ nm)) _) = nm
+memberName (ImplMember (Just (SingleElement _ nm)) _) = nm
 
 typeBody :: RunConfig -> ImplMember -> Int -> String
 typeBody cfg (ImplMember Nothing (IMSeqno SFront)) _ = "/* ppt */ int ppt_seqno"
@@ -29,14 +28,14 @@ typeBody cfg (ImplMember Nothing (IMSeqno SBack)) _ = "/* ppt */ int ppt_seqno_b
 typeBody cfg (ImplMember Nothing IMDescriminator) _ = "/* ppt */ int ppt_type"
 typeBody cfg (ImplMember Nothing (IMPad n)) i = 
          "/* ppt */ unsigned char  ppt_pad" ++ (show i) ++ "["++(show n) ++"]"
-typeBody cfg (ImplMember (Just fe@(FrameElement FDouble nm)) IMDouble) _ = "double " ++ nm
-typeBody cfg (ImplMember (Just fe@(FrameElement FFloat nm)) IMFloat) _ = "float " ++ nm
-typeBody cfg (ImplMember (Just fe@(FrameElement FInt nm)) IMInt) _ = "int " ++ nm
-typeBody cfg (ImplMember (Just fe@(FrameElement FTime nm)) IMTime) _ = "struct timeval " ++ nm
+typeBody cfg (ImplMember (Just fe@(SingleElement FDouble nm)) IMDouble) _ = "double " ++ nm
+typeBody cfg (ImplMember (Just fe@(SingleElement FFloat nm)) IMFloat) _ = "float " ++ nm
+typeBody cfg (ImplMember (Just fe@(SingleElement FInt nm)) IMInt) _ = "int " ++ nm
+typeBody cfg (ImplMember (Just fe@(SingleElement FTime nm)) IMTime) _ = "struct timeval " ++ nm
 
 
 makeMacro :: String -> ImplMember -> String
-makeMacro frame (ImplMember (Just (FrameElement _ mem)) _) = 
+makeMacro frame (ImplMember (Just (SingleElement _ mem)) _) = 
           let tstr = "WRITE_$ufr$_$umem$(_PARAM_) _ppt_frame_$frame$.$mem$ = (_PARAM_)"
               t = newSTMP tstr :: StringTemplate String
               u = setManyAttrib [("mem", mem), ("frame", frame), 
@@ -301,8 +300,8 @@ isPartOfOutput (ImplMember Nothing (IMSeqno SFront)) = True
 isPartOfOutput (ImplMember Nothing _) = False
 
 memberNames :: ImplMember -> [String]
-memberNames (ImplMember (Just (FrameElement _ nm)) IMTime) = [nm ++ ".tv_sec", nm ++ ".tv_usec"]
-memberNames (ImplMember (Just (FrameElement _ nm)) _) = [nm]
+memberNames (ImplMember (Just (SingleElement _ nm)) IMTime) = [nm ++ ".tv_sec", nm ++ ".tv_usec"]
+memberNames (ImplMember (Just (SingleElement _ nm)) _) = [nm]
 memberNames (ImplMember Nothing (IMSeqno _)) = ["ppt_seqno"]
 
 memberFormat :: ImplMember -> [String]

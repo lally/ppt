@@ -13,6 +13,10 @@ extra-deps: [
 , type-level-0.3.0
 ]
 
+#nix:
+#  enable: true
+#  packages: [gcc]
+
 # Override default flag values for local packages and extra-deps
 flags: {}
 
