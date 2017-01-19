@@ -1,6 +1,8 @@
-module Ppt.SIParser ( parseText, commandFile, PadBlock(PB), buildPBs, implement, quickParseFile,
-       sortByAscendingSizes, mapElements, blockifyList, makePadBlock, bracketPBs, maxSize,
-       tailPadAndAppend, PBImplFrame(PBImpl), padABlock, padding, aligningPadding, scanWhile ) where
+module Ppt.SIParser ( parseText, commandFile, PadBlock(PB), buildPBs,
+                      implement, quickParseFile, sortByAscendingSizes,
+                      mapElements, blockifyList, makePadBlock, bracketPBs,
+                      maxSize, tailPadAndAppend, PBImplFrame(PBImpl),
+                      padABlock, padding, aligningPadding, scanWhile ) where
 
 import Text.ParserCombinators.Parsec (sepBy1, try, char, eof, many1,
                                       many, ParseError, digit,

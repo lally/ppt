@@ -24,8 +24,26 @@ library
                        , Ppt.Storage
                        , Ppt.Generate.C
                        , Ppt.Generate.Cp
+                       , Ppt.Parser
 
-  build-depends:       base >= 4.7 && < 5, filepath, directory, unix, elf, process, HStringTemplate, MissingH, parsec, bytestring, pureMD5, type-level, binary, pretty, filepath
+  build-depends:       base >= 4.7 && < 5
+                     , filepath
+                     , directory
+                     , unix
+                     , elf
+                     , process
+                     , HStringTemplate
+                     , MissingH
+                     , parsec
+                     , bytestring
+                     , pureMD5
+                     , type-level
+                     , binary
+                     , pretty
+                     , filepath
+                     , containers
+  default-extensions:  UnicodeSyntax
+                     , OverloadedStrings
   default-language:    Haskell2010
 
 executable ppt
