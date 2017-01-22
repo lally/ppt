@@ -25,6 +25,7 @@ library
                        , Ppt.Generate.C
                        , Ppt.Generate.Cp
                        , Ppt.Parser
+                       , Ppt.BufferRep
 
   build-depends:       base >= 4.7 && < 5
                      , filepath
@@ -42,6 +43,8 @@ library
                      , pretty
                      , filepath
                      , containers
+                     , aeson
+                     , either
   default-extensions:  UnicodeSyntax
                      , OverloadedStrings
   default-language:    Haskell2010
