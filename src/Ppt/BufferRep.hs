@@ -3,18 +3,24 @@
 module Ppt.BufferRep where
 import GHC.Generics
 import Data.Aeson
-{- |Parsing and Layout
+{- |Parsing, Calculation, and Layout
 
  Ppt builds a buffer specification from its individual Frames.  It
  parses a Frame specification into a Layout that's got enough
  information for code generation and for placing into the buffer.
 -}
 
-
--- |Common to both Parsed Rep and Machine Layout
+-- |Common to both Parsed Rep and Machine Layout.  Presumed x86_64 type sizes.
 data Primitive = PDouble | PFloat | PInt | PTime | PCounter deriving (Generic, Eq, Show)
 
--- |Used in evaluation.  Some types are promotoed.
+data TargetInfo = TargetInfo { tDouble :: Int
+                             , tFloat :: Int
+                             , tInt :: Int
+                             , tTime :: Int
+                             , tCounter :: Int
+                             } deriving (Generic, Eq, Show)
+
+-- |Used in evaluation.  Some types are promoted.
 data PrimitiveValue = PVRational Double
                     | PVIntegral Int
                     | PVTime Int
@@ -133,11 +139,24 @@ data FrameElement = FMemberElem FrameMember
                   deriving (Generic, Eq, Show)
 
 -- |Machine Layout
+data LayoutKind = LKSeqno
+                | LKTypeDescrim
+                | LKMember
+                | LKPadding
+                deriving (Generic, Eq, Show)
+
 data LayoutMember = LMember { lOffset :: Int
                             , lType :: Primitive
                             , lVisible :: Bool
+                            , lAlignment :: Int
+                            , lSize :: Int
                               -- ^Invisible members are padding or
                               -- synchronization overhead.
+                            , lElement :: Maybe FrameElement
+                            , lElementIndex :: Maybe Int
+                              -- ^Some frame members may have more
+                              -- than a single member to represent
+                              -- them.
                             , lName :: String }
                    deriving (Generic, Eq, Show)
 
@@ -167,19 +186,21 @@ data LayoutMember = LMember { lOffset :: Int
 --    - We generally want to have one array for all stats.  So each
 --      series element just allocates slots in the array, and then
 --      generates expressions that add into the array.
- 
+
 
 --data FrameEvaluator = FEvaluate { feValues :: Map String PrimitiveValue }
 
 
 data Frame = Frame String [FrameElement] deriving (Generic, Eq, Show)
+data FrameLayout = FLayout String Frame [LayoutMember] deriving (Generic, Eq, Show)
 
 -- Look into AESON-ing this thing, to serialize into the generated
 -- source, and to shove into generated output for python
 -- post-processing.
 data Buffer = Buffer EmitOptions [Frame] deriving (Generic, Eq, Show)
 
-instance ToJSON Primitive        
+
+instance ToJSON Primitive
 instance ToJSON PrimitiveValue
 instance ToJSON ELanguage
 instance ToJSON ETimeSource
@@ -195,7 +216,9 @@ instance ToJSON FrameCalculation
 instance ToJSON FrameElement
 instance ToJSON LayoutMember
 instance ToJSON Frame
+instance ToJSON FrameLayout
 instance ToJSON Buffer
+instance ToJSON TargetInfo
 
 instance FromJSON Primitive
 instance FromJSON PrimitiveValue
@@ -213,5 +236,6 @@ instance FromJSON FrameCalculation
 instance FromJSON FrameElement
 instance FromJSON LayoutMember
 instance FromJSON Frame
-instance FromJSON Buffer           
-
+instance FromJSON FrameLayout
+instance FromJSON Buffer
+instance FromJSON TargetInfo

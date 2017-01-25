@@ -1,4 +1,4 @@
-module Ppt.Parser (parseFile, compileFrame) where
+module Ppt.Parser where -- (parseFile, compileFrame) where
 import Text.ParserCombinators.Parsec (sepBy1, try, char, eof, many1, alphaNum,
                                       many, ParseError, digit, noneOf,
                                       string, (<|>), (<?>), GenParser)
@@ -6,6 +6,7 @@ import Text.ParserCombinators.Parsec.Language (javaStyle)
 import Text.ParserCombinators.Parsec.Prim (parse)
 import qualified Text.ParserCombinators.Parsec.Token as P
 import Data.List
+import Control.Exception (handle)
 import Control.Monad
 import Control.Monad.Trans.Either
 import Data.Aeson (encode, decode)
@@ -15,8 +16,9 @@ import Ppt.BufferRep
 lexer :: P.TokenParser ()
 lexer = P.makeTokenParser
          (javaStyle {
-            P.reservedNames = [ "emit", "frame", "double", "int", "float",
-                                "time", "default", "buffer" ]
+            P.reservedNames = [ "emit", "frame", "double", "int", "float", "option",
+                                "time", "default", "buffer", "counter", "interval",
+                                "calc", "gap", "var", "mean" ]
           , P.caseSensitive = True
           } )
 
@@ -72,15 +74,15 @@ frame = do { resvd "frame"
            }
 
 
-emitCmd :: Parser [ELanguage]
-emitCmd = do { try (char 'C' >> char '+' >> char '+'); return [ELangCpp] }
-          <|> do { string "C" >> return [ELangC] }
-          <?> "language name"
+emitType :: Parser ELanguage
+emitType = do { try (char 'C' >> char '+' >> char '+'); return ELangCpp }
+           <|> do { string "C" >> return ELangC }
+           <?> "language name"
 
-emitType :: Parser [ELanguage]
-emitType = do { resvd "emit"
+emitCmd :: Parser ELanguage
+emitCmd = do { resvd "emit"
               ; ws
-              ; lang <- emitCmd
+              ; lang <- emitType
               ; ws
               ; return lang
               }
@@ -91,7 +93,7 @@ bufferValue = ( resvd "default" >> return Nothing )
 bufferCmd = do { resvd "buffer"
                ; name <- identifier
                ; size <- bufferValue
-               ; return [EBuffer name size]
+               ; return (EBuffer name size)
                }
 
 timeSpecOption :: Parser ETimeSource
@@ -136,6 +138,7 @@ quotedString = do
 
 tagOption = do { resvd "tag"
                ; key <- possiblyQuotedString
+               ; ws
                ; val <- possiblyQuotedString
                ; return (Tag key val) }
 
@@ -146,15 +149,15 @@ data PartialOption = OptLang ELanguage
                    | OptTags [ETag]
                    deriving (Eq, Show)
 
-optionParser :: Parser [PartialOption]
+optionParser :: Parser PartialOption
 optionParser = (do { resvd "time"
                    ; timeOpt <- timeOption
-                   ; return [OptTime timeOpt] })
+                   ; return (OptTime timeOpt) })
                <|> (do { resvd "runtime"
                        ; run <- runtimeOption
-                       ; return [OptRuntime run] })
+                       ; return (OptRuntime run) })
                <|> (do { tag <- tagOption
-                       ; return [OptTags [tag]] })
+                       ; return (OptTags [tag]) })
                <?> "option type: time, runtime, tag"
 
 optionSplitter :: PartialOption -> ([ELanguage], [EBuffer], [ETimeRep], [ERuntime], [[ETag]])
@@ -164,7 +167,8 @@ optionSplitter (OptTime t)    = ([], [], [t], [], [])
 optionSplitter (OptRuntime r) = ([], [], [], [r], [])
 optionSplitter (OptTags ts)   = ([], [], [], [], [ts])
 
-defaultEmit = Emit (EBuffer "unlisted" Nothing) ELangCpp (ETimeSpec ETimeClockMonotonic) (ERuntime False) []
+defaultEmit = Emit (EBuffer "unlisted" Nothing) ELangCpp (
+  ETimeSpec ETimeClockMonotonic) (ERuntime False) []
 
 optionCombine :: [PartialOption] -> Either String EmitOptions
 optionCombine opts = let
@@ -188,12 +192,15 @@ optionCombine opts = let
        <*> max1 runtimes "multithread option" (ERuntime False)
        <*> (pure tags))
 
+parseHead :: Parser PartialOption
+parseHead = (resvd "option" >> optionParser)
+            <|> (do { r <- emitCmd ; return $OptLang r})
+            <|> (do { r <- bufferCmd; return$ OptBuffer r})
+            <?> "header matter"
+
 headParser :: Parser EmitOptions
-headParser = do { options <- many ((resvd "option" >> optionParser)
-                                   <|> (do { r <- emitCmd ; return (map OptLang r)})
-                                   <|> (do { r <- bufferCmd; return (map OptBuffer r)})
-                                   <?> "header matter")
-                ; case (optionCombine $ concat options) of
+headParser = do { options <- many parseHead
+                ; case (optionCombine $ options) of
                     Left msg -> fail msg
                     Right opts -> return opts
                 }
@@ -205,11 +212,28 @@ parseText p input fname = parse (do { ws
                                     ; eof
                                     ; return x
                                     }) fname input
-parseFile :: String -> String -> Either ParseError Buffer
-parseFile input fname = parse (do { ws
-                                  ; head <- headParser
-                                  ; frames <- many frame
-                                  ; return (Buffer head frames) }) fname input
+
+tparse :: Show a => Parser a -> String -> Either ParseError a
+tparse p input = parseText p input "input"
+
+parseFile :: String -> IO (Either String Buffer)
+parseFile fname = do {let grammar = do { ws
+                                       ; head <- headParser
+                                       ; frames <- many frame
+                                       ; return (Buffer head frames) }
+                          showLeft :: Show a => Either a b -> Either String b
+                          showLeft (Left a) = Left $ show a
+                          showLeft (Right b) = Right b
+                          showErr :: String -> IOError -> IO (Either String a)
+                          showErr fname ex = return $ Left $ fname ++ ": " ++ show ex
+                     ; res <- handle (showErr fname) (do {
+                         filetext <- readFile fname ;
+                         return $ showLeft  $ parse grammar fname filetext
+                         })
+                     ; return res
+                     }
+
+
 
 readBuffer :: String -> Maybe Buffer
 readBuffer s = decode (pack s)
@@ -217,6 +241,4 @@ readBuffer s = decode (pack s)
 saveBuffer :: Buffer -> String
 saveBuffer b = unpack $ encode b
 
-
-compileFrame = undefined
 
