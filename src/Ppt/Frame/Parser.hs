@@ -1,4 +1,4 @@
-module Ppt.Parser where -- (parseFile, compileFrame) where
+module Ppt.Frame.Parser where -- (parseFile, compileFrame) where
 import Text.ParserCombinators.Parsec (sepBy1, try, char, eof, many1, alphaNum,
                                       many, ParseError, digit, noneOf,
                                       string, (<|>), (<?>), GenParser)
@@ -11,7 +11,7 @@ import Control.Monad
 import Control.Monad.Trans.Either
 import Data.Aeson (encode, decode)
 import Data.ByteString.Lazy.Char8 (pack, unpack)
-import Ppt.BufferRep
+import Ppt.Frame.ParsedRep
 
 lexer :: P.TokenParser ()
 lexer = P.makeTokenParser

@@ -24,8 +24,9 @@ library
                        , Ppt.Storage
                        , Ppt.Generate.C
                        , Ppt.Generate.Cp
-                       , Ppt.Parser
-                       , Ppt.BufferRep
+                       , Ppt.Frame.Parser
+                       , Ppt.Frame.ParsedRep
+                       , Ppt.Frame.Layout
 
   build-depends:       base >= 4.7 && < 5
                      , filepath

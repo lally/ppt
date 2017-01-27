@@ -1,0 +1,8 @@
+emit C++
+
+buffer simplebuffer 512
+
+frame foo {
+  interval time duration;
+  int loop_count;  /* how many loops did we do this time around? */
+}
