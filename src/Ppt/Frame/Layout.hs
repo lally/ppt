@@ -45,7 +45,10 @@ data LayoutMember = LMember { lType :: Primitive
                             , lName :: String }
                    deriving (Generic, Eq, Show)
 
-data FrameLayout = FLayout String Frame [LayoutMember] deriving (Generic, Eq, Show)
+data FrameLayout = FLayout { flName :: String
+                           , flFrame :: Frame
+                           , flLayout :: [LayoutMember]
+                           } deriving (Generic, Eq, Show)
 
 sizeOf :: TargetInfo -> Primitive -> Int
 sizeOf info PDouble = tDouble info
@@ -101,22 +104,26 @@ baseLayout _ (FCalculatedElem _ _ _ _ _) = []
 
 frontSeqnoName = "__ppt_seqno"
 descrimName = "__ppt_type"
-backPadding = "__ppt_pad"
+frontPaddingName = "__ppt_pad_front"
+backPaddingName = "__ppt_pad_back"
+backSeqnoName = "__ppt_seqno_back"
 
-addPrefixes :: TargetInfo -> [FrameLayout] -> [FrameLayout]
-addPrefixes _ [] = []
-addPrefixes tinfo [single@(FLayout n f mems)] =
+addPrefix :: TargetInfo -> [FrameLayout] -> [FrameLayout]
+addPrefix _ [] = []
+addPrefix tinfo [single@(FLayout n f mems)] =
   let seqnSz = tInt tinfo
   in [FLayout n f ((LMember PInt 0 seqnSz seqnSz (LKSeqno FrontSeq)
                     frontSeqnoName):mems)]
 addPrefixes tinfo multiple =
-  let addDescrim = undefined
+  let addDescrim =
+        if length multiple > 1
+        then [LMember PInt 0 descSz descSz (LKTypeDescrim descSz) descrimName]
+        else []
       seqnSz = tInt tinfo
       descSz = seqnSz -- TODO: resize this to be ceil_8(log_2(length multiple))
-  in map (\(FLayout n f mems) -> FLayout n f ([
-             LMember PInt 0 seqnSz seqnSz (LKSeqno FrontSeq) frontSeqnoName,
-             LMember PInt 0 descSz descSz (LKTypeDescrim descSz) descrimName
-             ] ++ mems)) multiple
+  in map (\(FLayout n f mems) -> FLayout n f ((
+             LMember PInt 0 seqnSz seqnSz (LKSeqno FrontSeq) frontSeqnoName):
+                                              (addDescrim ++ mems))) multiple
 
 -- |Removes the earliest set of items s.t. (sum $ map fn items). <=
 -- total.  Returns ([sum set], [remainder]).  Only works well if the
@@ -159,27 +166,87 @@ sortMembers (FLayout n f mems) =
       restMax = lSize $ head rest
   in if (length rest) > 0
      then let (frontRest, remainder) = takeSum frontRem lSize rest
-              prepaddedFront = front ++ frontRest
-              paddedFront =
+              prefilledFront = front ++ frontRest
+              filledFront =
                 let pad = alignRemainder (
-                      sum $ map lSize prepaddedFront) align
+                      sum $ map lSize prefilledFront) align
                 in if pad == 0
-                   then prepaddedFront
-                   else prepaddedFront ++ [
-                  LMember PByte 0 1 pad (LKPadding pad) backPadding
+                   then prefilledFront
+                   else prefilledFront ++ [
+                  LMember { lType = PByte
+                          , lOffset = 0
+                          , lAlignment = 1
+                          , lSize = pad
+                          , lKind = LKPadding pad
+                          , lName = frontPaddingName }
                   ]
-          in FLayout n f paddedFront
+          in FLayout n f (filledFront ++ remainder)
      else FLayout n f mems
 
+setOffsets :: [LayoutMember] -> Either String [LayoutMember]
+setOffsets mems =
+  offset 0 mems
+  where offset _ [] = Right []
+        offset start (x:xs) =
+          if (start `mod` lAlignment x) /= 0
+          then Left ("Wrong alignment (" ++ show start ++ ") for " ++ show x)
+          else let rest = offset (start + lSize x) xs
+               in case rest of
+                    Left err -> rest
+                    Right remain -> Right (
+                      x { lOffset = start }:remain)
+
+
 -- Lay out frames
-compileFrames :: TargetInfo -> EmitOptions -> [Frame] -> FrameLayout
-compileFrames target (Emit _ _  timerep runtime _) frs =
+compileFrames :: TargetInfo -> EmitOptions -> [Frame] ->
+                 Either String [FrameLayout]
+compileFrames target eOpts frs =
   let baseFrame target fr@(Frame nm elems)=
         FLayout nm fr (concatMap (baseLayout target) elems)
+      frameSize ::FrameLayout -> Int
+      frameSize layout = sum $ map lSize $ flLayout layout
       -- frames before we equalize their sizes and add the back seqno.
+      prepad :: [FrameLayout]
       prepad = map sortMembers $ addPrefixes target $ map (baseFrame target) frs
-
-  in sortMembers $ undefined
+      maxSize = maximum $ map frameSize prepad
+      -- Now figure out how much to pad to.  TODO: this is both
+      -- affected by the alignment of the sequence number (the rest of
+      -- each is already aligned) and the tPadTo value in the
+      -- TargetInfo.
+      padSizeTo = maxSize + (tInt target)
+      addBack :: Int -> FrameLayout -> FrameLayout
+      addBack size frame =
+        let padAmount = alignRemainder size $ sum $ map lSize $ flLayout frame
+            backSeq = LMember { lType = PInt
+                              , lOffset = 0
+                              , lAlignment = tInt target
+                              , lSize = tInt target
+                              , lKind = LKSeqno BackSeq
+                              , lName = backSeqnoName }
+        in if padAmount == 0
+           then frame { flLayout = (flLayout frame) ++ [backSeq]}
+           else frame { flLayout = (flLayout frame) ++ [
+                          LMember { lType = PByte
+                                  , lOffset = 0
+                                  , lAlignment = 1
+                                  , lSize = padAmount
+                                  , lKind = LKPadding padAmount
+                                  , lName = backPaddingName}
+                          , backSeq]}
+       -- LOOKUP: List monad for applicative use of setOffsets on list
+       -- of all frames.
+      withBacks = map (addBack padSizeTo) prepad
+      foldOffsets :: [FrameLayout] -> Either String [FrameLayout]
+      foldOffsets [] = Right []
+      foldOffsets (x:xs) =
+        let ret = setOffsets $ flLayout x
+            children = foldOffsets xs
+        in case children of
+             Left _ -> children
+             Right rs -> case ret of
+               Left s -> Left s
+               Right r -> Right ((x { flLayout = r }):rs)
+  in foldOffsets withBacks
 
 
 -- Then get theem padded to the same size.

@@ -41,8 +41,12 @@ data ERuntime = ERuntime { erMultithread :: Bool } deriving (Generic, Eq, Show)
 data ETag = Tag String String deriving (Generic, Eq, Show) -- ^Key, Value
 data EBuffer = EBuffer { ebName :: String, ebMinElements :: Maybe Int }
              deriving (Generic, Eq, Show)
-data EmitOptions = Emit EBuffer ELanguage ETimeRep ERuntime [ETag]
-                 deriving (Generic, Eq, Show)
+data EmitOptions = EmitOptions { eBuffer ::EBuffer
+                               , eLanguage :: ELanguage
+                               , eTimeRep :: ETimeRep
+                               , eRuntime:: ERuntime
+                               , eTags :: [ETag] }
+                   deriving (Generic, Eq, Show)
 
 -- |Literal data members of the Frame.  These can be single,
 -- standalone members /or/ a differential.  In the latter case, a

@@ -27,6 +27,7 @@ library
                        , Ppt.Frame.Parser
                        , Ppt.Frame.ParsedRep
                        , Ppt.Frame.Layout
+                       , Ppt.Frame.Util
 
   build-depends:       base >= 4.7 && < 5
                      , filepath

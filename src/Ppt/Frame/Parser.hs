@@ -1,4 +1,4 @@
-module Ppt.Frame.Parser where -- (parseFile, compileFrame) where
+module Ppt.Frame.Parser where -- (parseFile, compileFrame) where 
 import Text.ParserCombinators.Parsec (sepBy1, try, char, eof, many1, alphaNum,
                                       many, ParseError, digit, noneOf,
                                       string, (<|>), (<?>), GenParser)
@@ -167,8 +167,11 @@ optionSplitter (OptTime t)    = ([], [], [t], [], [])
 optionSplitter (OptRuntime r) = ([], [], [], [r], [])
 optionSplitter (OptTags ts)   = ([], [], [], [], [ts])
 
-defaultEmit = Emit (EBuffer "unlisted" Nothing) ELangCpp (
-  ETimeSpec ETimeClockMonotonic) (ERuntime False) []
+defaultEmit = EmitOptions { eBuffer = (EBuffer "unlisted" Nothing)
+                          , eLanguage = ELangCpp
+                          , eTimeRep = (ETimeSpec ETimeClockMonotonic)
+                          , eRuntime = (ERuntime False)
+                          , eTags = [] }
 
 optionCombine :: [PartialOption] -> Either String EmitOptions
 optionCombine opts = let
@@ -186,7 +189,7 @@ optionCombine opts = let
   exact1 :: [a] -> String -> Either String a
   exact1 (x:[]) _  = Right x
   exact1 _ name = Left ("Exactly 1 " ++ name ++ " required")
-  in (Emit <$> max1 buffers "buffer line" (EBuffer "unlisted" Nothing)
+  in (EmitOptions <$> max1 buffers "buffer line" (EBuffer "unlisted" Nothing)
        <*> exact1 langs "Language"
        <*> max1 timereps "time representation" (ETimeSpec ETimeClockMonotonic)
        <*> max1 runtimes "multithread option" (ERuntime False)
@@ -216,11 +219,13 @@ parseText p input fname = parse (do { ws
 tparse :: Show a => Parser a -> String -> Either ParseError a
 tparse p input = parseText p input "input"
 
+fileParser = do { ws
+                ; head <- headParser
+                ; frames <- many frame
+                ; return (Buffer head frames) }
+
 parseFile :: String -> IO (Either String Buffer)
-parseFile fname = do {let grammar = do { ws
-                                       ; head <- headParser
-                                       ; frames <- many frame
-                                       ; return (Buffer head frames) }
+parseFile fname = do {let grammar = fileParser
                           showLeft :: Show a => Either a b -> Either String b
                           showLeft (Left a) = Left $ show a
                           showLeft (Right b) = Right b
