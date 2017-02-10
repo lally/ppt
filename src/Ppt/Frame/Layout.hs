@@ -83,8 +83,8 @@ serializeOffsets target inmems =
 -}
 
 diffName :: String -> Int -> String
-diffName nm 0 = nm ++ "__start"
-diffName nm 1 = nm ++ "__end"
+diffName nm 0 = nm ++ "_start"
+diffName nm 1 = nm ++ "_end"
 diffName _ _ = undefined
 
 -- |Initial layout information for a given FrameElement.  This is stages 1-2.

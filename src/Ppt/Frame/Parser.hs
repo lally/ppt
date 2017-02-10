@@ -16,9 +16,10 @@ import Ppt.Frame.ParsedRep
 lexer :: P.TokenParser ()
 lexer = P.makeTokenParser
          (javaStyle {
-            P.reservedNames = [ "emit", "frame", "double", "int", "float", "option",
-                                "time", "default", "buffer", "counter", "interval",
-                                "calc", "gap", "var", "mean" ]
+            P.reservedNames = [
+                "emit", "frame", "double", "int", "float", "option",
+                  "time", "default", "buffer", "counter", "interval",
+                  "calc", "gap", "var", "mean" ]
           , P.caseSensitive = True
           } )
 
@@ -175,8 +176,10 @@ defaultEmit = EmitOptions { eBuffer = (EBuffer "unlisted" Nothing)
 
 optionCombine :: [PartialOption] -> Either String EmitOptions
 optionCombine opts = let
-  addUp (a, b, c, d, e) (f, g, h, i, j) = (a ++ f, b ++ g, c ++ h, d ++ i, e ++ j)
-  (langs, buffers, timereps, runtimes, rawTags) = foldl' addUp ([], [], [], [], []) (
+  addUp (a, b, c, d, e) (f, g, h, i, j) =
+    (a ++ f, b ++ g, c ++ h, d ++ i, e ++ j)
+  (langs, buffers, timereps, runtimes, rawTags) =
+    foldl' addUp ([], [], [], [], []) (
     map optionSplitter opts)
   tags = concat rawTags
   min1 :: [a] -> String -> Either String a
@@ -189,11 +192,13 @@ optionCombine opts = let
   exact1 :: [a] -> String -> Either String a
   exact1 (x:[]) _  = Right x
   exact1 _ name = Left ("Exactly 1 " ++ name ++ " required")
-  in (EmitOptions <$> max1 buffers "buffer line" (EBuffer "unlisted" Nothing)
-       <*> exact1 langs "Language"
-       <*> max1 timereps "time representation" (ETimeSpec ETimeClockMonotonic)
-       <*> max1 runtimes "multithread option" (ERuntime False)
-       <*> (pure tags))
+  in (EmitOptions
+      <$> max1 buffers "buffer line" (EBuffer "unlisted" Nothing)
+      <*> exact1 langs "Language"
+      <*> max1 timereps "time representation" (
+         ETimeSpec ETimeClockMonotonic)
+      <*> max1 runtimes "multithread option" (ERuntime False)
+      <*> (pure tags))
 
 parseHead :: Parser PartialOption
 parseHead = (resvd "option" >> optionParser)
@@ -225,24 +230,25 @@ fileParser = do { ws
                 ; return (Buffer head frames) }
 
 parseFile :: String -> IO (Either String Buffer)
-parseFile fname = do {let grammar = fileParser
-                          showLeft :: Show a => Either a b -> Either String b
-                          showLeft (Left a) = Left $ show a
-                          showLeft (Right b) = Right b
-                          showErr :: String -> IOError -> IO (Either String a)
-                          showErr fname ex = return $ Left $ fname ++ ": " ++ show ex
-                     ; res <- handle (showErr fname) (do {
-                         filetext <- readFile fname ;
-                         return $ showLeft  $ parse grammar fname filetext
-                         })
-                     ; return res
-                     }
+parseFile fname = do  {
+    let showLeft :: Show a => Either a b -> Either String b
+        showLeft (Left a) = Left $ show a
+        showLeft (Right b) = Right b
+        showErr :: String -> IOError -> IO (Either String a)
+        showErr fname ex = return $ Left $ fname ++ ": " ++ show ex
+  ; res <- handle (showErr fname) (do {
+    filetext <- readFile fname ;
+    return $ showLeft $ parse fileParser fname filetext
+    })
+  ; return res
+  }
 
 
-
+-- |Read a buffer from a JSON string
 readBuffer :: String -> Maybe Buffer
 readBuffer s = decode (pack s)
 
+-- |Show a buffer to a JSON string
 saveBuffer :: Buffer -> String
 saveBuffer b = unpack $ encode b
 
