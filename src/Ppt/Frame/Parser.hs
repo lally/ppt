@@ -71,6 +71,7 @@ frame = do { resvd "frame"
            ; members <- many frameMember
            ; ws
            ; ch '}'
+           ; ws
            ; return (Frame name (concat members))
            }
 

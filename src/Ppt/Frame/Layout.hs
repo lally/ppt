@@ -45,10 +45,22 @@ data LayoutMember = LMember { lType :: Primitive
                             , lName :: String }
                    deriving (Generic, Eq, Show)
 
+data LayoutIOSpec = LayoutIO { lioSize :: Int
+                             , lIOBackOffset :: Int
+                             } deriving (Eq, Show)
+
 data FrameLayout = FLayout { flName :: String
                            , flFrame :: Frame
                            , flLayout :: [LayoutMember]
                            } deriving (Generic, Eq, Show)
+
+layoutSpec :: FrameLayout -> LayoutIOSpec
+layoutSpec layout =
+  let sumSize = sum $ map lSize $ flLayout layout
+      lastMem = last $ flLayout layout
+      backOff = case lastMem of
+                  (LMember _ off _ _ (LKSeqno BackSeq) _) -> off
+  in LayoutIO sumSize backOff
 
 sizeOf :: TargetInfo -> Primitive -> Int
 sizeOf info PDouble = tDouble info

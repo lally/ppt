@@ -46,6 +46,8 @@ private:
 // overloads for each type.
 inline void writeout(const mainloop& ml) { if (_ppt_saving_buffer_foo) {  _ppt_save_foo(static_cast<void*>(&ml)); }}
 
+
+
 }  // namespace ppt
 -}
 -- |Derived from EmitOptions for whatever data we need for outputting.
@@ -56,71 +58,123 @@ data OutputCfg = OutputCfg { timeType :: String, -- ^Decltype of time vars
                              indent :: Int, -- ^Indentation depth
                              defaultInit :: Bool,
                              -- ^Does the constructor zero out the type?
-                             multithreadWrite :: Bool
+                             multithreadWrite :: Bool,
                              -- ^Use multithreaded write protocol?
+                             bufName :: String
                            }
 
 -- |A member may require that a module be generated.  Without any
 -- members requiring a module, we don't have to generate it at all.
-data GenModule = GMCounters deriving (Eq, Show)
+data GenModule = GMCounters
+               | GMSaveBuffer LayoutIOSpec Bool -- ^Store layout, and whether it's multithreaded.
+               deriving (Eq, Show)
 
 instance Ord GenModule where
-  compare a b = EQ -- Only 1 module right now.
+  compare GMCounters GMCounters = EQ
+  compare (GMSaveBuffer (LayoutIO lsz loff) lm) ( GMSaveBuffer (LayoutIO rsz roff)  rm) =
+    let szcomp = compare lsz rsz
+        offcomp = compare loff roff
+        mcomp = compare lm rm
+    in if szcomp == EQ
+       then if offcomp == EQ
+            then mcomp
+            else offcomp
+       else szcomp
+  compare GMCounters ( GMSaveBuffer _ _) = LT
+  compare (GMSaveBuffer _ _) GMCounters = GT
 
-data MemberData = MB { mbMethods ::[PP.Doc], mbMembers ::[PP.Doc], mbHeaders :: [String]
+-- |Members to go into the final declaration.  Note that these *must*
+-- be kept in the order presented, as they've already had memory
+-- layout applied.
+data MemberData = MB { mbMethods ::[PP.Doc], mbMember :: PP.Doc, mbHeaders :: [String]
                      , mbModules :: [GenModule] }
                  -- ^Declared members in the original frame specification
-                | PrivateMem { pmbMembers ::[PP.Doc], pmbHeaders :: [String]
+                | PrivateMem { pmbMember :: PP.Doc, pmbHeaders :: [String]
                              , pmbModules :: [GenModule] }
                  -- ^PPT private stuff (sequence numbers, type descriminator)
                   deriving (Eq, Show)
 
 -- |Breakdown of members in a given class declaration.
+data QualMember = PubMember PP.Doc
+                | PrivMember PP.Doc
+                deriving (Eq, Show)
 data Decl  = ClassDecl { cName :: String
-                       , publicMethods :: [PP.Doc]
-                       , publicMembers :: [PP.Doc]
-                       , privateMembers ::[PP.Doc]
+                       , cNr :: Maybe Int
+                       , cMembers :: [QualMember]
+                       , cMethods :: [PP.Doc]
                        , cHeaders :: [String]
                        , cModules :: [GenModule]}
-           | ToplevelDecl { tHeaders :: [String]
-                          , tDecls :: [PP.Doc]
-                          , tModules :: [GenModule]}
            deriving (Eq, Show)
 
 classDecl :: String -> [MemberData] -> Decl
-classDecl n [] = ClassDecl n [] [] [] [] []
-classDecl n ((MB methods mems hdrs mods):rest) =
-               let (ClassDecl _ pmeth pmem prmem ns ms) = classDecl n rest
-               in ClassDecl n (methods ++ pmeth) (mems ++ pmem) prmem (hdrs ++ ns) (mods ++ ms)
-classDecl n ((PrivateMem ms hdrs mods):rest) =
-               let (ClassDecl _ pmeth pmem prmem ns mds) = classDecl n rest
-               in ClassDecl n pmeth pmem (ms ++ prmem) (hdrs ++ ns) (mods ++ mds)
+classDecl n [] = ClassDecl n Nothing [] [] [] []
+classDecl n ((MB methods mem hdrs mods):rest) =
+               let (ClassDecl _ _ pmem pmeth ns ms) = classDecl n rest
+               in ClassDecl n Nothing (PubMember mem:pmem) (methods ++ pmeth) (hdrs ++ ns) (mods ++ ms)
+classDecl n ((PrivateMem m hdrs mods):rest) =
+               let (ClassDecl _ _ pmem meth ns mds) = classDecl n rest
+               in ClassDecl n Nothing (PrivMember m:pmem) meth (hdrs ++ ns) (mods ++ mds)
 
-writeDecl :: OutputCfg -> Decl -> PP.Doc
-writeDecl cfg (ClassDecl name pubMeths pubMems privMems _ _) =
+semify cfg (e:es) = (PP.nest (indent cfg) e <> PP.semi):semify cfg es
+semify _ [] = []
+
+docPublic = PP.text "public:"
+docPrivate = PP.text "private:"
+
+indentify cfg (e:es) = (PP.nest (indent cfg) e):indentify cfg es
+indentify _ [] = []
+
+formatMems cfg (e:es) = (PP.nest (indent cfg) e <> PP.semi):formatMems cfg es
+formatMems _ [] = []
+
+qualBlock _ [] = []
+qualBlock cfg ((PubMember n):ns) =
+  let isPub (PubMember _) = True
+      isPub _ = False
+      pubPrefix = map (\(PubMember t) -> t) $ takeWhile isPub ns
+      suffix = drop (length pubPrefix) ns
+  in docPublic:(formatMems cfg (n:pubPrefix)) ++ qualBlock cfg suffix
+qualBlock cfg ((PrivMember n):ns) =
+  let isPub (PrivMember _) = True
+      isPub _ = False
+      pubPrefix = map (\(PrivMember t) -> t) $ takeWhile isPub ns
+      suffix = drop (length pubPrefix) ns
+  in docPrivate:(formatMems cfg (n:pubPrefix)) ++ qualBlock cfg suffix
+
+writeDecl :: OutputCfg -> String -> Decl -> PP.Doc
+writeDecl cfg firstName (ClassDecl name typeIdx clsMems clsMeths _ _) =
   let tag = PP.text $ "class " ++ name
-      semify (e:es) = (PP.nest (indent cfg) e <> PP.semi):semify es
-      semify [] = []
-      indentify (e:es) = (PP.nest (indent cfg) e):indentify es
-      indentify [] = []
-      privateBlock = if length privMems > 0
-        then (PP.text "private:"): semify privMems
-        else []
-      publicBlock = if length pubMems > 0 || length pubMems > 0
-        then (PP.text "public:") : ((semify pubMems) ++ (indentify pubMeths))
-        else []
-  in PP.hang (tag <+> PP.lbrace) (indent cfg) $ PP.sep $ privateBlock ++ publicBlock ++ [
-    PP.rbrace <> PP.semi]
-writeDecl cfg (ToplevelDecl _ mems _) = PP.vcat (L.intersperse PP.semi mems)
+      publicTail [] = [docPublic]
+      publicTail s =
+        case (last s) of
+          PubMember _ -> []
+          PrivMember _ -> [docPublic]
+      memBody = qualBlock cfg clsMems
+      saveMethod = blockdecl cfg (PP.text "void save()")  PP.semi  (
+        [ "int index = nextIndex()",
+          "__ppt_seqno = index",
+          "__ppt_seqno_back = index" ] ++
+        (case typeIdx of
+          Nothing -> []
+          Just idx -> [PP.text $ "__ppt_type = " ++ show idx]) ++ [
+        if (name /= firstName)
+        then PP.text $ concat ["save(reinterpret_cast<", firstName, "*>(this))"]
+        else PP.text "save(this)"
+        ])
+      withMeths meths = (publicTail clsMems) ++ (indentify cfg (saveMethod:clsMeths))
+  in PP.vcat ((tag <+> PP.lbrace):( memBody ++ (withMeths clsMeths)) ++ [
+    PP.rbrace <> PP.semi])
 
 -- |Clearly can only work for simple types.  No arrays.
 dataMember :: String -> String -> PP.Doc
 dataMember ty name = PP.text ty <+> PP.text name
 
 -- |Generates a block declaration that's collapsable.
-blockdecl :: OutputCfg -> PP.Doc ->PP.Doc -> [PP.Doc] ->PP.Doc
+blockdecl :: OutputCfg -> PP.Doc -> PP.Doc -> [PP.Doc] ->PP.Doc
 blockdecl cfg name sep elems =
-  PP.hang (name <+> PP.lbrace) (indent cfg) $ PP.sep $ elems ++ [PP.rbrace]
+  let sfxElems = map (<> sep) elems
+  in (PP.sep [(name <+> PP.lbrace), PP.nest (indent cfg) (PP.sep sfxElems), PP.rbrace])
+--    PP.hang (name <+> PP.lbrace) (indent cfg) $ PP.sep $ sfxElems) <> PP.rbrace
 
 funccall :: OutputCfg -> PP.Doc -> [PP.Doc] -> PP.Doc
 funccall cfg name args =
@@ -130,46 +184,56 @@ funccall cfg name args =
 
 -- |Make member declarations out of a single literal (layed out) input member.
 makeMember :: OutputCfg -> LayoutMember -> MemberData
-makeMember cfg (LMember PTime _ _ _ k nm) =
+makeMember cfg (LMember PTime _ _ _ _ nm) =
   let timety = timeType cfg
       timeheaders = [timeHeader cfg]
   in (MB [blockdecl cfg (PP.text $ "void snapshot_" ++ nm ++ "()") PP.semi [
-             timeSave cfg nm <> PP.semi]]
-         [dataMember timety nm] timeheaders [])
+             timeSave cfg nm]]
+         (dataMember timety nm) timeheaders [])
 
 makeMember cfg (LMember PCounter _ _ _ k nm) =
-  MB [] [dataMember "uint64_t" nm] [] [GMCounters]
+  MB [] (dataMember "uint64_t" nm) [] [GMCounters]
 makeMember cfg (LMember PByte _ _ _ (LKPadding n) nm) =
-  MB [] [dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")] ["cstdint"] []
-makeMember cfg (LMember ty _ _ _ k nm) =
+  PrivateMem (dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")) ["cstdint"] []
+--  MB [] (dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")) ["cstdint"] []
+makeMember cfg (LMember ty _ _ _ (LKMember _ _) nm) =
   let declType = case ty of
         PDouble -> "double"
         PFloat -> "float"
         PInt -> "int"
-  in MB [] [dataMember declType nm] [] []
+  in MB [] (dataMember declType nm) [] []
+
+makeMember cfg (LMember ty _ _ _ _ nm) =
+  let declType = case ty of
+        PDouble -> "double"
+        PFloat -> "float"
+        PInt -> "int"
+  in PrivateMem (dataMember declType nm) [] []
 
 makeFrameDecl :: OutputCfg -> FrameLayout -> Decl
 makeFrameDecl cfg (FLayout nm fr layoutmems) =
   let mems = map (makeMember cfg) layoutmems
   in classDecl nm mems
 
-allHeaders :: [Decl] -> [GenModule] -> [String]
-allHeaders decls mods =
+allHeaders :: OutputCfg -> [Decl] -> [GenModule] -> [String]
+allHeaders cfg decls mods =
   let declsOf (ClassDecl _ _ _ _ h _) = h
-      declsOf (ToplevelDecl h _ _) = h
       modsOf GMCounters = []
+      modsOf (GMSaveBuffer _ _) = ["sys/types.h", "sys/shm.h"] ++
+        if multithreadWrite cfg
+        then ["atomic"]
+        else []
   in S.toList $ S.fromList $ (concatMap declsOf decls) ++ (concatMap modsOf mods)
 
 allModules :: [Decl] -> [GenModule]
 allModules decls =
   let modsOf (ClassDecl _ _ _ _ _ m) = m
-      modsOf (ToplevelDecl _ _ m) = m
   in S.toList $ S.fromList $ concatMap modsOf decls
 
 makeOutCfg :: EmitOptions -> OutputCfg
-makeOutCfg (EmitOptions _ _ ETimeVal (ERuntime mt) _) =
-  OutputCfg "struct timespec" "time.h" (\var -> PP.text $ "time(&" ++ var ++ ")") 4 True mt
-makeOutCfg (EmitOptions _ _ (ETimeSpec src) (ERuntime mt) _) =
+makeOutCfg (EmitOptions b _ ETimeVal (ERuntime mt) _) =
+  OutputCfg "struct timespec" "time.h" (\var -> PP.text $ "time(&" ++ var ++ ")") 4 True mt (ebName b)
+makeOutCfg (EmitOptions b _ (ETimeSpec src) (ERuntime mt) _) =
   let clock = case src of
         ETimeClockRealtime ->         "CLOCK_REALTIME"
         ETimeClockRealtimeCoarse ->   "CLOCK_REALTIME_COARSE"
@@ -180,18 +244,95 @@ makeOutCfg (EmitOptions _ _ (ETimeSpec src) (ERuntime mt) _) =
         ETimeClockProcessCputimeId -> "CLOCK_PROCESS_CPUTIME_ID"
         ETimeClockThreadCputimeId ->  "CLOCK_THREAD_CPUTIME_ID"
   in OutputCfg "struct timeval" "time.h" (
-    \var -> PP.text $ "clock_gettime(" ++ clock ++ ", &" ++ var ++ ")") 4 True mt
+    \var -> PP.text $ "clock_gettime(" ++ clock ++ ", &" ++ var ++ ")") 4 True mt (ebName b)
 
 includeHeaders :: [String] -> [PP.Doc]
 includeHeaders (h:hs) =
   (mconcat $ map PP.text ["#include <", h, ">"]):includeHeaders hs
 includeHeaders [] = []
 
+docConcat xs = PP.text $ concat xs
 -- Parts of the file:
 -- The headers
 -- Any runtime decls
 -- The classes
 -- The runtime support
+
+modDecls :: EmitOptions -> String -> [GenModule] -> PP.Doc
+modDecls opts firstName mods =
+--  PP.text $ "/* Insert  decls for runtime here: " ++ (L.intercalate ", " $ map show mods) ++ " */"
+  let eachMod mod = case mod of
+                      GMSaveBuffer (LayoutIO sz off) mt ->
+                        PP.vcat $ [docConcat ["void save(const ", firstName, " * buf);"],
+                                  docConcat ["int nextIndex();"]]
+                      GMCounters -> PP.text "/* counters */"
+  in mconcat $ map eachMod mods
+
+stmt :: String -> PP.Doc
+stmt s = PP.text s <> PP.semi
+modImpls :: OutputCfg -> String -> [GenModule] -> PP.Doc
+modImpls cfg firstName mods =
+  let writeBarrier = PP.text "std::atomic_thread_fence(std::memory_order_release)"
+      eachMod (GMSaveBuffer (LayoutIO sz off) mt) = PP.sep [
+        docConcat [ "extern \"C\" int _ppt_hmem_", bufName cfg, " [[attrused]]" ] <> PP.semi,
+        docConcat [ "static ", firstName, " *_ppt_buf" ] <> PP.semi,
+        docConcat [ "static int _ppt_bufsz" ] <> PP.semi,
+        -- TODO: write a multithread-capable version of nextIndex
+        (if multithreadWrite cfg
+          then blockdecl cfg (PP.text "static int nextIndex()") PP.semi [
+                           "static std::atomic<int> s_index(1)",
+                           "return std::fetch_add(&s_index, 1, std::memory_order_release)" ]
+          else docConcat [ "static int nextIndex() { static int s_index = 0; return ++s_index; }" ]),
+        blockdecl cfg (docConcat ["void save(const ", firstName, " * buf, int index)"])  PP.empty [
+           blockdecl cfg (docConcat [ "if (_ppt_buf || try_attach())"]) PP.semi $ concat [
+               [ PP.text "int modidx = index % _ppt_bufsz" ],
+               (if multithreadWrite cfg
+                then [PP.text "ppt_buf[modidx].__ppt_seqno = 0",
+                      PP.text "ppt_buf[modidx].__ppt_seqno_back = 0",
+                      writeBarrier]
+                else []),
+               [ PP.text "ppt_buf[modidx].__ppt_seqno = modidx",
+                 writeBarrier,
+                 PP.text ("memcpy(&_ppt_buf[modidx], buf + sizeof(buf->__ppt_seqno), " ++
+                           "sizeof(*buf) - 2*sizeof(buf->__ppt_seqno))"),
+                 writeBarrier,
+                 PP.text "ppt_buf[modidx].__ppt_seqno_back = modidx",
+                 writeBarrier
+               ]
+           ],
+           PP.empty
+        ],
+        blockdecl cfg (PP.text "bool try_attach()") PP.empty [
+            blockdecl cfg (docConcat ["if (_ppt_hmem_",bufName cfg," && !_ppt_buf)"]) PP.empty [
+                stmt "struct shmid_ds ds",
+                blockdecl cfg (docConcat [
+                                  "if (shmctl(_ppt_hmem_",bufName cfg,", IPC_STAT, &ds) != 0)"]) PP.semi [
+                    docConcat ["perror(\"failed ppt attach of ", bufName cfg, ": shmctl\")"],
+                    docConcat ["_ppt_hmem_",bufName cfg," = 0"] <> PP.semi,
+                    stmt "return false"
+                    ],
+                docConcat ["_ppt_bufsz = ds.shm_segsz / sizeof(",firstName,")"] <> PP.semi,
+                docConcat [firstName," *ptr = reinterpret_cast<",firstName,">(shmat(_ppt_hmem_",
+                           bufName cfg,", nullptr, 0))"] <> PP.semi,
+                blockdecl cfg (PP.text "if (ptr == nullptr)") PP.semi [
+                    docConcat ["perror(\"failed ppt attach of ", bufName cfg, ": shmat\");"],
+                    docConcat ["_ppt_hmem_",bufName cfg," = 0"],
+                    PP.text "return false"
+                    ],
+                stmt "_ppt_buf = ptr",
+                stmt "return true"
+                ],
+            blockdecl cfg (docConcat ["else if (_ppt_buf && !_ppt_hmem_",bufName cfg,")"]) PP.empty [
+                blockdecl cfg (PP.text "if (shmdt(_ppt_buf) != 0)") PP.semi [
+                    docConcat ["perror(\"failed ppt detach of ",bufName cfg,": shmdt\")"],
+                    PP.text "_ppt_buf = nullptr"
+                    ]
+                ],
+                  stmt "return false"
+            ]
+        ]
+      eachMod GMCounters = PP.text "/* counters */"
+  in PP.sep $ map eachMod mods
 
 cpFile :: EmitOptions -> [FrameLayout] -> PP.Doc
 {-
@@ -207,72 +348,23 @@ cpFile :: EmitOptions -> [FrameLayout] -> PP.Doc
 cpFile opts flayous =
   let cfg = makeOutCfg opts
       frameDecls = map (makeFrameDecl cfg) flayous
-      mods = allModules frameDecls
-      headers = allHeaders frameDecls mods
+      isMultithreaded = erMultithread $ eRuntime opts
+      (firstName, lspec) = case flayous of
+        [] -> ("void", LayoutIO  0 0)
+        (x:_) -> (flName x, layoutSpec x)
+      mods = (GMSaveBuffer lspec isMultithreaded ):allModules frameDecls
+      headers = allHeaders cfg frameDecls mods
       headerDocs =
         let pfx = PP.text "#include <"
             sfx = PP.char '>'
         in map (\n -> pfx <> PP.text n <> sfx) headers
-      allDocs = headerDocs ++ map (writeDecl cfg) frameDecls
+      ourModDelcs = modDecls opts firstName mods
+      ourModImpls = modImpls cfg firstName mods
+      sequencedDecls =
+        if length frameDecls > 1
+        then map (\(frame, index) -> frame { cNr = Just index }) $ zip frameDecls [1..]
+        else frameDecls
+      allDocs =
+        headerDocs ++ [ourModDelcs] ++ map (writeDecl cfg firstName) sequencedDecls ++ [ourModImpls]
   in PP.vcat allDocs
 
-
---    blockdecl cfg tag PP.semi (privateBlock ++ publicBlock)
-
-
-
-{-
--- |Returns the C++ name of the represented type.
-rawType _ IMDouble = "double"
-rawType _ IMFloat = "float"
-rawType _ IMInt = "int"
-rawType cfg IMTime = timeType cfg
-
-
-saveMember :: OutputCfg -> ImplMemberType -> String -> PP.Doc
-saveMember cfg IMTime nm =
-  blockdecl cfg (PP.text ("snapshot_" ++ nm)) PP.semi [ PP.text $ (timeSave cfg) nm ]
-
-member :: OutputCfg -> ImplMember -> Int -> MemberData
-member cfg (ImplMember Nothing (IMSeqno SFront)) _ = PrivateMem (dataMember "int" "ppt_seqno")
-member cfg (ImplMember Nothing (IMSeqno SBack)) _ = PrivateMem (dataMember "int" "ppt_seqno_back")
-member cfg (ImplMember Nothing IMDescriminator) _ = PrivateMem  (dataMember "int" "ppt_type")
-member cfg (ImplMember Nothing (IMPad n)) i =
-  PrivateMem  (dataMember "unsigned char" ("ppt_pad" ++ (show i) ++ "[" ++ (show n) ++ "]"))
-
-member cfg (ImplMember (Just fe@(SingleElement _ nm)) ty) _ = (
-  MB PP.empty (dataMember (rawType cfg ty) nm))
-
--- General plan:
--- - Put together a list ofPP.Docs that'll go through 'vcat' to get put in the final file.
--- - Make that a 'concat' of lists for the different declarations.
-
-formatMembers :: OutputCfg -> [ImplFrame] -> PP.Doc
-formatMembers _ [] = PP.empty
-formatMembers c (im:ims) =
-  let (ImplFrame nm mems) = im
-      (ClassDecl pubMethods pubMembers privateMems) = classDecl $ map (
-        \(a, b) -> member c a b) $ zip mems [1..]
-  in blockdecl c (PP.text $ "class " ++ nm) PP.semi ([PP.text "public:"] ++
-                                            pubMethods ++
-                                            pubMembers ++
-                                            [PP.text "private:"] ++
-                                            privateMems)
-
--- |Generates a C++ header file.
-makeHeader :: OutputCfg -> FullImplementation -> FilePath -> String
-makeHeader cfg impl fname =
-                 let outCfg = undefined :: OutputCfg
-                     includeFiles =  []
-                     (Impl spec buffer frames) = impl
-                 in show $ PP.vcat (
-                   includeFiles ++ [blockdecl outCfg (PP.text "namespace ppt") PP.semi [
-                                       blockdecl outCfg (PP.text $"namespace " ++ buffer) PP.semi [
-                                           formatMembers cfg frames]]])
-
-emitCp :: RunConfig -> FullSpecification -> FullImplementation -> String -> (String, String, String, String)
-emitCp cfg spec impl fname =
-                   let outCfg = undefined
-                   in (makeHeader outCfg impl fname, undefined, undefined, undefined)
-
--}

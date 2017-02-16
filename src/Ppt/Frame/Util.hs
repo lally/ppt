@@ -1,4 +1,4 @@
-module Ppt.Layout.Util where
+module Ppt.Frame.Util where
 import Ppt.Frame.Layout
 import Ppt.Frame.ParsedRep
 import Ppt.Frame.Parser
@@ -14,7 +14,14 @@ opts = (EmitOptions
         (ERuntime True)
         [])
 cfg = makeOutCfg opts
-x86_64 = TargetInfo 8 4 4 8 8 1
+x64 = TargetInfo 8 4 4 8 8 1
+
+bimap :: Either a b -> (a -> c) -> (b -> d) -> Either c d
+bimap (Left x) f g = Left (f x)
+bimap (Right r) f g = Right (g r)
+
+rcompose (Left x) f g = Left (f x)
+rcompose (Right r) f g = g r
 
 parseMember :: String -> [MemberData]
 parseMember str =
@@ -29,14 +36,20 @@ parseMember str =
 parseFrame :: String -> Either String [FrameLayout]
 parseFrame str =
   let res = tparse frame str
-  in case res of
-    Left s -> Left $ show s
-    Right fr -> compileFrames x86_64 opts [fr]
+  in rcompose res show (\n -> compileFrames x64 opts [n])
 
 genFrame :: String -> Either String PP.Doc
 genFrame str =
   let parseRes = parseFrame str
-       -- Take advantage of lazy evaluation here.
-  in case parseRes of
-    (Left s) -> Left s
-    (Right flayout) -> Right $ cpFile opts flayout
+  in bimap parseRes id (cpFile opts)
+
+ls :: Show a => Either a b -> Either String b
+ls (Left s) = Left (show s)
+ls (Right r) = Right r
+
+genFile :: String -> Either String PP.Doc
+genFile str = do
+  (Buffer emitopts frames) <- ls $ tparse fileParser str
+  compiled <- compileFrames x64 emitopts frames
+  return $ cpFile emitopts compiled
+--  in undefined
