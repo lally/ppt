@@ -4,6 +4,7 @@ import GHC.Generics
 import Data.Aeson
 import Ppt.Frame.ParsedRep
 import Data.List
+import qualified Data.HashMap.Strict as HM
 
 -- |Indicates sizes of machine types on the runtime platform.  Also
 -- includes other layout-related values due to options.
@@ -53,6 +54,13 @@ data FrameLayout = FLayout { flName :: String
                            , flFrame :: Frame
                            , flLayout :: [LayoutMember]
                            } deriving (Generic, Eq, Show)
+
+data JsonRep = JsonRep { jsAbi :: String
+                       , jsBufferEmit :: EmitOptions
+                       , jsBufferFrames :: [FrameLayout]
+                       , jsTags :: [(String, String)]
+                       , jsMetadata :: [String]
+                       } deriving (Generic, Eq, Show)
 
 layoutSpec :: FrameLayout -> LayoutIOSpec
 layoutSpec layout =
@@ -273,3 +281,21 @@ instance FromJSON LayoutKind
 instance FromJSON LayoutMember
 instance FromJSON FrameLayout
 instance FromJSON TargetInfo
+
+instance ToJSON JsonRep where
+  toJSON j = object [ "abi" .= jsAbi j
+                    , "tags" .= toJSON (
+                        map (\(k,v) -> object [ "key" .= k, "value" .= v ]) $ jsTags j)
+                    , "metadata" .= jsMetadata j
+                    , "emit" .= jsBufferEmit j
+                    , "frames" .= jsBufferFrames j
+                    ]
+
+instance FromJSON JsonRep where
+  parseJSON = withObject "_json" $ \o -> do
+    abi <- o .: "abi"
+    emit <- o .: "emit"
+    frames <- o .: "frames"
+    tags <- o .:? "tags" .!= []
+    md <- o .:? "metadata" .!= []
+    return $ JsonRep abi emit frames tags md

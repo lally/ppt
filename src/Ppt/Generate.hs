@@ -13,6 +13,7 @@ import Data.List.Utils (replace)
 import Data.Word (Word8)
 import Data.String.Utils (join)
 import System.Directory (copyFile)
+import qualified Text.PrettyPrint as PP
 --import Scratch
 
 
@@ -24,6 +25,8 @@ generateC inst = show inst
 -}
 data Flag = OutputFile String
           deriving (Eq, Show)
+
+data GeneratedFile = GF String PP.Doc deriving (Eq, Show)
 
 -- The argument list accepted by the 'generate' command
 arglist :: [GO.OptDescr Flag]

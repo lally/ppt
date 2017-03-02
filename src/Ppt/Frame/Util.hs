@@ -3,17 +3,22 @@ import Ppt.Frame.Layout
 import Ppt.Frame.ParsedRep
 import Ppt.Frame.Parser
 import Ppt.Generate.Cp
+import Data.Bits (shiftR, (.&.))
+import Foreign.C.Types
+import qualified Data.ByteString as BS
 import qualified Text.PrettyPrint as PP
 
 target = TargetInfo 8 4 8 16 8 1
 
+opts :: EmitOptions
 opts = (EmitOptions
         (EBuffer "test" Nothing)
         ELangCpp
         (ETimeSpec ETimeClockRealtime)
         (ERuntime True)
+        []
         [])
-cfg = makeOutCfg opts
+cfg = makeOutCfg opts []
 x64 = TargetInfo 8 4 4 8 8 1
 
 bimap :: Either a b -> (a -> c) -> (b -> d) -> Either c d
@@ -52,4 +57,4 @@ genFile str = do
   (Buffer emitopts frames) <- ls $ tparse fileParser str
   compiled <- compileFrames x64 emitopts frames
   return $ cpFile emitopts compiled
---  in undefined
+

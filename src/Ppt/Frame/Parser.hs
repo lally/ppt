@@ -86,6 +86,7 @@ emitCmd = do { resvd "emit"
               ; ws
               ; lang <- emitType
               ; ws
+              ; semi
               ; return lang
               }
 
@@ -95,6 +96,8 @@ bufferValue = ( resvd "default" >> return Nothing )
 bufferCmd = do { resvd "buffer"
                ; name <- identifier
                ; size <- bufferValue
+               ; ws
+               ; semi
                ; return (EBuffer name size)
                }
 
@@ -154,11 +157,17 @@ data PartialOption = OptLang ELanguage
 optionParser :: Parser PartialOption
 optionParser = (do { resvd "time"
                    ; timeOpt <- timeOption
+                   ; ws
+                   ; semi
                    ; return (OptTime timeOpt) })
                <|> (do { resvd "runtime"
                        ; run <- runtimeOption
+                       ; ws
+                       ; semi
                        ; return (OptRuntime run) })
                <|> (do { tag <- tagOption
+                       ; ws
+                       ; semi
                        ; return (OptTags [tag]) })
                <?> "option type: time, runtime, tag"
 
@@ -169,12 +178,14 @@ optionSplitter (OptTime t)    = ([], [], [t], [], [])
 optionSplitter (OptRuntime r) = ([], [], [], [r], [])
 optionSplitter (OptTags ts)   = ([], [], [], [], [ts])
 
+{-
 defaultEmit = EmitOptions { eBuffer = (EBuffer "unlisted" Nothing)
                           , eLanguage = ELangCpp
                           , eTimeRep = (ETimeSpec ETimeClockMonotonic)
                           , eRuntime = (ERuntime False)
-                          , eTags = [] }
-
+                          , eTags = []
+                          , eOptions = []}
+-}
 optionCombine :: [PartialOption] -> Either String EmitOptions
 optionCombine opts = let
   addUp (a, b, c, d, e) (f, g, h, i, j) =
@@ -199,7 +210,8 @@ optionCombine opts = let
       <*> max1 timereps "time representation" (
          ETimeSpec ETimeClockMonotonic)
       <*> max1 runtimes "multithread option" (ERuntime False)
-      <*> (pure tags))
+      <*> (pure tags)
+      <*> (pure []))
 
 parseHead :: Parser PartialOption
 parseHead = (resvd "option" >> optionParser)
@@ -252,5 +264,4 @@ readBuffer s = decode (pack s)
 -- |Show a buffer to a JSON string
 saveBuffer :: Buffer -> String
 saveBuffer b = unpack $ encode b
-
 

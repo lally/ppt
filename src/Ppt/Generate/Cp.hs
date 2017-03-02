@@ -11,6 +11,8 @@ import qualified Data.List as L
 
 import qualified Text.PrettyPrint as PP
 import Text.PrettyPrint ((<>),(<+>))
+import Data.Aeson (encode)
+import Data.ByteString.Lazy.Char8 (unpack)
 {-
 For input:
   option clock timeval monotonic;
@@ -44,23 +46,31 @@ private:
 };
 
 // overloads for each type.
-inline void writeout(const mainloop& ml) { if (_ppt_saving_buffer_foo) {  _ppt_save_foo(static_cast<void*>(&ml)); }}
-
-
-
+inline void writeout(const mainloop& ml) {
+    if (_ppt_saving_buffer_foo) {
+      _ppt_save_foo(static_cast<void*>(&ml));
+    }
+}
 }  // namespace ppt
 -}
+
 -- |Derived from EmitOptions for whatever data we need for outputting.
-data OutputCfg = OutputCfg { timeType :: String, -- ^Decltype of time vars
-                             timeHeader :: String,
+data OutputCfg = OutputCfg { timeType :: String -- ^Decltype of time vars
+                           , timeHeader :: String
                              -- ^Which header to include for time support
-                             timeSave :: (String -> PP.Doc), -- ^Save time to a var
-                             indent :: Int, -- ^Indentation depth
-                             defaultInit :: Bool,
+                           , timeSave :: (String -> PP.Doc) -- ^Save time to a var
+                           , indent :: Int -- ^Indentation depth
+                           , defaultInit :: Bool
                              -- ^Does the constructor zero out the type?
-                             multithreadWrite :: Bool,
+                           , multithreadWrite :: Bool
                              -- ^Use multithreaded write protocol?
-                             bufName :: String
+                           , bufName :: String
+                           , sourceSuffix :: String
+                           , headerSuffix :: String
+                           , filePrefix :: String
+                           , namespace :: [String]
+                           , emitOpts :: EmitOptions
+                           , frames :: [FrameLayout]
                            }
 
 -- |A member may require that a module be generated.  Without any
@@ -196,6 +206,8 @@ makeMember cfg (LMember PCounter _ _ _ k nm) =
 makeMember cfg (LMember PByte _ _ _ (LKPadding n) nm) =
   PrivateMem (dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")) ["cstdint"] []
 --  MB [] (dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")) ["cstdint"] []
+
+  -- TODO: Put in initializer here if defaultInit outputcfg
 makeMember cfg (LMember ty _ _ _ (LKMember _ _) nm) =
   let declType = case ty of
         PDouble -> "double"
@@ -219,7 +231,7 @@ allHeaders :: OutputCfg -> [Decl] -> [GenModule] -> [String]
 allHeaders cfg decls mods =
   let declsOf (ClassDecl _ _ _ _ h _) = h
       modsOf GMCounters = []
-      modsOf (GMSaveBuffer _ _) = ["sys/types.h", "sys/shm.h"] ++
+      modsOf (GMSaveBuffer _ _) = ["sys/types.h", "sys/shm.h", "unistd.h"] ++
         if multithreadWrite cfg
         then ["atomic"]
         else []
@@ -230,11 +242,25 @@ allModules decls =
   let modsOf (ClassDecl _ _ _ _ _ m) = m
   in S.toList $ S.fromList $ concatMap modsOf decls
 
-makeOutCfg :: EmitOptions -> OutputCfg
-makeOutCfg (EmitOptions b _ ETimeVal (ERuntime mt) _) =
-  OutputCfg "struct timespec" "time.h" (\var -> PP.text $ "time(&" ++ var ++ ")") 4 True mt (ebName b)
-makeOutCfg (EmitOptions b _ (ETimeSpec src) (ERuntime mt) _) =
-  let clock = case src of
+-- |Returns the option-based elements of OutputCfg
+filePrefs :: EmitOptions -> OutputCfg
+filePrefs e@(EmitOptions b _ _ _ _ _) =
+  OutputCfg "" "" undefined 4 True False (ebName b) ".cc" ".hh" "" ["ppt", ebName b] e []
+
+-- | Returns (sourceSuffix, headerSuffix, filePrefix, namespace) from an array of EOption
+cppOpts :: [EOption] -> (String, String, String, [String])
+cppOpts _ = (".cc", ".hh", "ppt-", ["ppt"])
+
+makeOutCfg :: EmitOptions -> [FrameLayout] -> OutputCfg
+
+makeOutCfg e@(EmitOptions b _ ETimeVal (ERuntime mt) _ eOpts) flayouts=
+  let (ssfx, hsfx, fpfx, ns) = cppOpts eOpts
+  in (OutputCfg "struct timespec" "time.h" (\var -> PP.text $ "time(&" ++ var ++ ")") 4 True mt
+   (ebName b) ssfx hsfx fpfx ns e flayouts)
+
+makeOutCfg e@(EmitOptions b _ (ETimeSpec src) (ERuntime mt) _ eOpts) flayouts =
+  let (ssfx, hsfx, fpfx, ns) = cppOpts eOpts
+      clock = case src of
         ETimeClockRealtime ->         "CLOCK_REALTIME"
         ETimeClockRealtimeCoarse ->   "CLOCK_REALTIME_COARSE"
         ETimeClockMonotonic ->        "CLOCK_MONOTONIC"
@@ -243,8 +269,9 @@ makeOutCfg (EmitOptions b _ (ETimeSpec src) (ERuntime mt) _) =
         ETimeClockBoottime ->         "CLOCK_BOOTTIME"
         ETimeClockProcessCputimeId -> "CLOCK_PROCESS_CPUTIME_ID"
         ETimeClockThreadCputimeId ->  "CLOCK_THREAD_CPUTIME_ID"
-  in OutputCfg "struct timeval" "time.h" (
-    \var -> PP.text $ "clock_gettime(" ++ clock ++ ", &" ++ var ++ ")") 4 True mt (ebName b)
+  in (OutputCfg "struct timeval" "time.h" (
+         \var -> PP.text $ "clock_gettime(" ++ clock ++ ", &" ++ var ++ ")")
+       4 True mt (ebName b) ssfx hsfx fpfx ns e flayouts)
 
 includeHeaders :: [String] -> [PP.Doc]
 includeHeaders (h:hs) =
@@ -252,6 +279,7 @@ includeHeaders (h:hs) =
 includeHeaders [] = []
 
 docConcat xs = PP.text $ concat xs
+docConcatSp xs = PP.text $ L.intercalate " " xs
 -- Parts of the file:
 -- The headers
 -- Any runtime decls
@@ -263,76 +291,133 @@ modDecls opts firstName mods =
 --  PP.text $ "/* Insert  decls for runtime here: " ++ (L.intercalate ", " $ map show mods) ++ " */"
   let eachMod mod = case mod of
                       GMSaveBuffer (LayoutIO sz off) mt ->
-                        PP.vcat $ [docConcat ["void save(const ", firstName, " * buf);"],
-                                  docConcat ["int nextIndex();"]]
+                        PP.vcat $ [ docConcat ["class ", firstName, ";"],
+                                    docConcatSp ["void","save(const", firstName, "* buf);"],
+                                    docConcatSp ["int", "nextIndex();"]]
                       GMCounters -> PP.text "/* counters */"
   in mconcat $ map eachMod mods
 
+quoteString :: String -> String
+quoteString str =
+  qs str
+  where qs (c:cs)
+          | c == '"' = "\\\"" ++ (qs cs)
+          | c == '\\' = "\\\\" ++ (qs cs)
+          | otherwise = c:(qs cs)
+        qs [] = []
+
 stmt :: String -> PP.Doc
 stmt s = PP.text s <> PP.semi
-modImpls :: OutputCfg -> String -> [GenModule] -> PP.Doc
-modImpls cfg firstName mods =
+
+makeJSON :: OutputCfg -> String
+makeJSON cfg =
+  let json = JsonRep "1.0.0" (emitOpts cfg) (frames cfg) [] []
+  in quoteString $ unpack $ encode json
+
+structDecl :: OutputCfg -> String -> [(String, String)] -> PP.Doc
+structDecl cfg name members =
+  let leftwidth :: Int
+      leftwidth = foldl max 0 $ map (length . fst) members
+      -- type, member
+      formatMem (t, m) = (PP.sizedText leftwidth t) <> PP.text m <> PP.semi
+  in blockdecl cfg (docConcatSp [ "struct",  name ]) PP.empty $ map formatMem members
+
+externDecl :: String -> [String] -> PP.Doc
+externDecl typ nameMems = docConcatSp [ "extern \"C\"", typ, L.intercalate "_" nameMems ] <> PP.semi
+
+staticDecl :: String -> [String] -> PP.Doc
+staticDecl typ nameMems =
+  docConcatSp [ "static", typ, L.intercalate "_" nameMems ] <> PP.semi
+
+controlDecl :: OutputCfg -> PP.Doc
+controlDecl cfg =
+  let size_t = "size_t"
+      uint64_t = "uint64_t"
+  in structDecl cfg "ppt_control" [ (size_t, "control_blk_sz")
+                                  , (uint64_t, "data_block_hmem")
+                                  , (uint64_t, "data_block_hmem_attached")
+                                  , ("void*", "data_block")
+                                  , (size_t, "data_block_sz")
+                                  , ("uint32_t", "nr_perf_ctrs")
+                                  , ("struct perf_event_attr", "counterdata[3]")
+                                  , (uint64_t, "client_flags") ]
+
+
+eachMod firstName cfg (GMSaveBuffer (LayoutIO sz off) mt) =
   let writeBarrier = PP.text "std::atomic_thread_fence(std::memory_order_release)"
-      eachMod (GMSaveBuffer (LayoutIO sz off) mt) = PP.sep [
-        docConcat [ "extern \"C\" int _ppt_hmem_", bufName cfg, " [[attrused]]" ] <> PP.semi,
-        docConcat [ "static ", firstName, " *_ppt_buf" ] <> PP.semi,
-        docConcat [ "static int _ppt_bufsz" ] <> PP.semi,
-        -- TODO: write a multithread-capable version of nextIndex
-        (if multithreadWrite cfg
-          then blockdecl cfg (PP.text "static int nextIndex()") PP.semi [
-                           "static std::atomic<int> s_index(1)",
-                           "return std::fetch_add(&s_index, 1, std::memory_order_release)" ]
-          else docConcat [ "static int nextIndex() { static int s_index = 0; return ++s_index; }" ]),
-        blockdecl cfg (docConcat ["void save(const ", firstName, " * buf, int index)"])  PP.empty [
-           blockdecl cfg (docConcat [ "if (_ppt_buf || try_attach())"]) PP.semi $ concat [
-               [ PP.text "int modidx = index % _ppt_bufsz" ],
-               (if multithreadWrite cfg
-                then [PP.text "ppt_buf[modidx].__ppt_seqno = 0",
-                      PP.text "ppt_buf[modidx].__ppt_seqno_back = 0",
-                      writeBarrier]
-                else []),
-               [ PP.text "ppt_buf[modidx].__ppt_seqno = modidx",
-                 writeBarrier,
-                 PP.text ("memcpy(&_ppt_buf[modidx], buf + sizeof(buf->__ppt_seqno), " ++
-                           "sizeof(*buf) - 2*sizeof(buf->__ppt_seqno))"),
-                 writeBarrier,
-                 PP.text "ppt_buf[modidx].__ppt_seqno_back = modidx",
-                 writeBarrier
-               ]
-           ],
-           PP.empty
-        ],
-        blockdecl cfg (PP.text "bool try_attach()") PP.empty [
-            blockdecl cfg (docConcat ["if (_ppt_hmem_",bufName cfg," && !_ppt_buf)"]) PP.empty [
-                stmt "struct shmid_ds ds",
-                blockdecl cfg (docConcat [
-                                  "if (shmctl(_ppt_hmem_",bufName cfg,", IPC_STAT, &ds) != 0)"]) PP.semi [
-                    docConcat ["perror(\"failed ppt attach of ", bufName cfg, ": shmctl\")"],
-                    docConcat ["_ppt_hmem_",bufName cfg," = 0"] <> PP.semi,
-                    stmt "return false"
-                    ],
-                docConcat ["_ppt_bufsz = ds.shm_segsz / sizeof(",firstName,")"] <> PP.semi,
-                docConcat [firstName," *ptr = reinterpret_cast<",firstName,">(shmat(_ppt_hmem_",
-                           bufName cfg,", nullptr, 0))"] <> PP.semi,
-                blockdecl cfg (PP.text "if (ptr == nullptr)") PP.semi [
-                    docConcat ["perror(\"failed ppt attach of ", bufName cfg, ": shmat\");"],
-                    docConcat ["_ppt_hmem_",bufName cfg," = 0"],
-                    PP.text "return false"
-                    ],
-                stmt "_ppt_buf = ptr",
-                stmt "return true"
+      attrused = " __attribute__((used))"
+      qt = "\""
+  in PP.sep [
+    externDecl "const char*" ["_ppt_json", bufName cfg, attrused, "=", (qt ++ makeJSON cfg ++ qt)],
+    externDecl "int" ["_ppt_hmem", bufName cfg, attrused],
+    docConcat [ "extern \"C\" struct { pid_t ppt_agent_pid; } _ppt_stat_", bufName cfg, attrused
+              ] <> PP.semi,
+    staticDecl "int" ["_ppt_bufsz"],
+    -- The _mem member points to our control block (mapped in).  The _buf member points to our
+    -- array.  For non-resizable configurations, these both point into the same shared memory
+    -- segment.
+    controlDecl cfg,
+    staticDecl "ppt_control" ["*_ppt_ctrl"],
+    staticDecl firstName ["*_ppt_buf"],
+    (if multithreadWrite cfg
+      then blockdecl cfg (PP.text "static int nextIndex()") PP.semi [
+                       "static std::atomic<int> s_index(1)",
+                       "return std::fetch_add(&s_index, 1, std::memory_order_release)" ]
+      else docConcat [ "static int nextIndex() { static int s_index = 0; return ++s_index; }" ]),
+    blockdecl cfg (docConcat ["void save(const ", firstName, " * buf, int index)"])  PP.empty [
+       blockdecl cfg (docConcat [ "if (_ppt_buf || try_attach())"]) PP.semi $ concat [
+           [ PP.text "int modidx = index % _ppt_bufsz" ],
+           (if multithreadWrite cfg
+            then [PP.text "_ppt_buf[modidx].__ppt_seqno = 0",
+                  PP.text "_ppt_buf[modidx].__ppt_seqno_back = 0",
+                  writeBarrier]
+            else []),
+           [ PP.text "_ppt_buf[modidx].__ppt_seqno = modidx",
+             writeBarrier,
+             PP.text ("memcpy(&_ppt_buf[modidx], buf + sizeof(buf->__ppt_seqno), " ++
+                       "sizeof(*buf) - 2*sizeof(buf->__ppt_seqno))"),
+             writeBarrier,
+             PP.text "_ppt_buf[modidx].__ppt_seqno_back = modidx",
+             writeBarrier
+           ]
+       ],
+       PP.empty
+    ],
+    blockdecl cfg (PP.text "bool try_attach()") PP.empty [
+        blockdecl cfg (docConcat ["if (_ppt_hmem_",bufName cfg," && !_ppt_buf)"]) PP.empty [
+            stmt "struct shmid_ds ds",
+            blockdecl cfg (docConcat [
+                              "if (shmctl(_ppt_hmem_",bufName cfg,", IPC_STAT, &ds) != 0)"]) PP.semi [
+                docConcat ["perror(\"failed ppt attach of ", bufName cfg, ": shmctl\")"],
+                docConcat ["_ppt_hmem_",bufName cfg," = 0"] <> PP.semi,
+                stmt "return false"
                 ],
-            blockdecl cfg (docConcat ["else if (_ppt_buf && !_ppt_hmem_",bufName cfg,")"]) PP.empty [
-                blockdecl cfg (PP.text "if (shmdt(_ppt_buf) != 0)") PP.semi [
-                    docConcat ["perror(\"failed ppt detach of ",bufName cfg,": shmdt\")"],
-                    PP.text "_ppt_buf = nullptr"
-                    ]
+            docConcat ["off_t elem_offset = sizeof(ppt_control) + (sizeof(ppt_control) % sizeof(", firstName, "))"],
+            docConcat ["_ppt_bufsz = (ds.shm_segsz - elem_offset) / sizeof(",firstName,")"] <> PP.semi,
+            docConcat ["_ppt_control = reinterpret_cast<",firstName,">(shmat(_ppt_hmem_",
+                       bufName cfg,", nullptr, 0))"] <> PP.semi,
+            blockdecl cfg (PP.text "if (_ppt_control == nullptr)") PP.semi [
+                docConcat ["perror(\"failed ppt attach of ", bufName cfg, ": shmat\");"],
+                docConcat ["_ppt_hmem_",bufName cfg," = 0"],
+                PP.text "return false"
                 ],
-                  stmt "return false"
-            ]
+            stmt "_ppt_buf = _ppt_control + elem_offset",
+            stmt "return true"
+            ],
+        blockdecl cfg (docConcat ["else if (_ppt_buf && !_ppt_hmem_",bufName cfg,")"]) PP.empty [
+            blockdecl cfg (PP.text "if (shmdt(_ppt_buf) != 0)") PP.semi [
+                docConcat ["perror(\"failed ppt detach of ",bufName cfg,": shmdt\")"],
+                PP.text "_ppt_buf = nullptr"
+                ]
+            ],
+            stmt "return false"
         ]
-      eachMod GMCounters = PP.text "/* counters */"
-  in PP.sep $ map eachMod mods
+    ]
+eachMod _ cfg GMCounters = PP.text "/* counters */"
+
+
+modImpls :: OutputCfg -> String -> [GenModule] -> PP.Doc
+modImpls cfg firstName mods = PP.sep $ map (eachMod firstName cfg) mods
 
 cpFile :: EmitOptions -> [FrameLayout] -> PP.Doc
 {-
@@ -346,7 +431,7 @@ cpFile :: EmitOptions -> [FrameLayout] -> PP.Doc
  - Emit definitions for runtime and enabled modules
 -}
 cpFile opts flayous =
-  let cfg = makeOutCfg opts
+  let cfg = makeOutCfg opts flayous
       frameDecls = map (makeFrameDecl cfg) flayous
       isMultithreaded = erMultithread $ eRuntime opts
       (firstName, lspec) = case flayous of

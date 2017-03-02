@@ -41,11 +41,19 @@ data ERuntime = ERuntime { erMultithread :: Bool } deriving (Generic, Eq, Show)
 data ETag = Tag String String deriving (Generic, Eq, Show) -- ^Key, Value
 data EBuffer = EBuffer { ebName :: String, ebMinElements :: Maybe Int }
              deriving (Generic, Eq, Show)
+
+data EOption = ENamespace [String]
+             | EHeaderSuffix String
+             | ESourceSuffix String
+             | EFilePrefix String
+             deriving (Generic, Eq, Show)
+
 data EmitOptions = EmitOptions { eBuffer ::EBuffer
                                , eLanguage :: ELanguage
                                , eTimeRep :: ETimeRep
                                , eRuntime:: ERuntime
-                               , eTags :: [ETag] }
+                               , eTags :: [ETag]
+                               , eOptions :: [EOption] }
                    deriving (Generic, Eq, Show)
 
 -- |Literal data members of the Frame.  These can be single,
@@ -113,6 +121,7 @@ instance ToJSON ETimeRep
 instance ToJSON ERuntime
 instance ToJSON ETag
 instance ToJSON EBuffer
+instance ToJSON EOption
 instance ToJSON EmitOptions
 instance ToJSON FrameMember
 instance ToJSON FBinOperation
@@ -130,6 +139,7 @@ instance FromJSON ETimeRep
 instance FromJSON ERuntime
 instance FromJSON ETag
 instance FromJSON EBuffer
+instance FromJSON EOption
 instance FromJSON EmitOptions
 instance FromJSON FrameMember
 instance FromJSON FBinOperation
