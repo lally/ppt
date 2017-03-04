@@ -76,12 +76,13 @@ data OutputCfg = OutputCfg { timeType :: String -- ^Decltype of time vars
 -- |A member may require that a module be generated.  Without any
 -- members requiring a module, we don't have to generate it at all.
 data GenModule = GMCounters
-               | GMSaveBuffer LayoutIOSpec Bool -- ^Store layout, and whether it's multithreaded.
+               | GMSaveBuffer LayoutIOSpec Bool
+               -- ^Store layout, and whether it's multithreaded.
                deriving (Eq, Show)
 
 instance Ord GenModule where
   compare GMCounters GMCounters = EQ
-  compare (GMSaveBuffer (LayoutIO lsz loff) lm) ( GMSaveBuffer (LayoutIO rsz roff)  rm) =
+  compare (GMSaveBuffer (LayoutIO lsz loff) lm) (GMSaveBuffer (LayoutIO rsz roff)  rm) =
     let szcomp = compare lsz rsz
         offcomp = compare loff roff
         mcomp = compare lm rm
@@ -124,6 +125,10 @@ semify _ [] = []
 
 docPublic = PP.text "public:"
 docPrivate = PP.text "private:"
+enquote :: String -> String
+enquote s =  "\"" ++ s ++ "\""
+enbracket :: String -> String
+enbracket s =  "<" ++ s ++ ">"
 
 indentify cfg (e:es) = (PP.nest (indent cfg) e):indentify cfg es
 indentify _ [] = []
@@ -284,7 +289,6 @@ classDecl n ((PrivateMem m hdrs mods):rest) =
                let (ClassDecl _ _ pmem meth ns mds) = classDecl n rest
                in ClassDecl n Nothing (PrivMember m:pmem) meth (hdrs ++ ns) (mods ++ mds)
 
-
 qualBlock _ [] = []
 qualBlock cfg ((PubMember n):ns) =
   let isPub (PubMember _) = True
@@ -328,6 +332,12 @@ makeMember cfg (LMember ty _ _ _ _ nm) =
         PFloat -> "float"
         PInt -> "int"
   in PrivateMem (dataMember declType nm) [] []
+
+sequenceDecls :: [Decl] -> [Decl]
+sequenceDecls frameDecls =
+  if length frameDecls > 1
+  then map (\(frame, index) -> frame { cNr = Just index }) $ zip frameDecls [1..]
+  else frameDecls
 
 -- High level (per header/ per source file)
 
@@ -387,40 +397,47 @@ saveFn firstName cfg =
     ]
   where writeBarrier = PP.text "std::atomic_thread_fence(std::memory_order_release)"
 
-
-attachFn :: String -> OutputCfg -> PP.Doc
-attachFn firstName cfg =
+attachFn :: String -> OutputCfg -> Bool -> PP.Doc
+attachFn firstName cfg hasCounters =
     blockdecl cfg (PP.text "bool try_attach()") PP.empty [
-        blockdecl cfg (docConcat ["if (_ppt_hmem_",bufName cfg," && !_ppt_buf)"]) PP.empty [
+        blockdecl cfg (docConcat ["if (_ppt_hmem_",buf," && !_ppt_buf)"]) PP.empty ([
             stmt "struct shmid_ds ds",
             blockdecl cfg (docConcat [
-                              "if (shmctl(_ppt_hmem_",bufName cfg,", IPC_STAT, &ds) != 0)"]) PP.semi [
-                docConcat ["perror(\"failed ppt attach of ", bufName cfg, ": shmctl\")"],
-                docConcat ["_ppt_hmem_",bufName cfg," = 0"] <> PP.semi,
-                stmt "return false"
+                              "if (shmctl(_ppt_hmem_",buf,", IPC_STAT, &ds) != 0)"]) PP.semi [
+                docConcat ["perror(\"failed ppt attach of ", buf, ": shmctl\")"],
+                docConcat ["_ppt_hmem_",buf," = 0"],
+                PP.text "return false"
                 ],
             docConcat ["off_t elem_offset = sizeof(ppt_control) + (sizeof(ppt_control) % sizeof(",
                        firstName, "))"],
-            docConcat ["_ppt_bufsz = (ds.shm_segsz - elem_offset) / sizeof(",firstName,")"
-                      ] <> PP.semi,
-            docConcat ["_ppt_control = reinterpret_cast<",firstName,">(shmat(_ppt_hmem_",
-                       bufName cfg,", nullptr, 0))"] <> PP.semi,
+            docConcat ["_ppt_control = reinterpret_cast<",firstName,"*>(shmat(_ppt_hmem_",
+                       buf,", nullptr, 0))"] <> PP.semi,
             blockdecl cfg (PP.text "if (_ppt_control == nullptr)") PP.semi [
-                docConcat ["perror(\"failed ppt attach of ", bufName cfg, ": shmat\");"],
-                docConcat ["_ppt_hmem_",bufName cfg," = 0"],
+                docConcat ["perror(\"failed ppt attach of ", buf, ": shmat\")"],
+                docConcat ["_ppt_hmem_",buf," = 0"],
                 PP.text "return false"
                 ],
             stmt "_ppt_buf = _ppt_control + elem_offset",
-            stmt "return true"
-            ],
-        blockdecl cfg (docConcat ["else if (_ppt_buf && !_ppt_hmem_",bufName cfg,")"]) PP.empty [
+            stmt "_ppt_control->data_block = _ppt_buf",
+            docConcat ["_ppt_control->data_block_sz = (ds.shm_segsz - elem_offset) / sizeof(",
+                       firstName,")" ] <> PP.semi,
+            docConcat ["_ppt_control->data_block_hmem_attached = _ppt_hmem_",
+                       buf ] <> PP.semi]
+            ++ (if hasCounters
+                then [stmt "setupCounters()"]
+                else []) ++
+            [stmt "return true"
+            ]),
+        blockdecl cfg (docConcat ["else if (_ppt_buf && !_ppt_hmem_",buf,")"]) PP.empty [
             blockdecl cfg (PP.text "if (shmdt(_ppt_buf) != 0)") PP.semi [
-                docConcat ["perror(\"failed ppt detach of ",bufName cfg,": shmdt\")"],
-                PP.text "_ppt_buf = nullptr"
-                ]
+                docConcat ["perror(\"failed ppt detach of ",buf,": shmdt\")"]
+                ],
+            stmt "_ppt_buf = nullptr",
+            docConcat ["_ppt_hmem_", buf, " = 0"] <> PP.semi
             ],
             stmt "return false"
         ]
+    where buf = bufName cfg
 
 nextIdxFn :: String -> OutputCfg -> PP.Doc
 nextIdxFn firstName cfg =
@@ -430,17 +447,13 @@ nextIdxFn firstName cfg =
                        "return std::fetch_add(&s_index, 1, std::memory_order_release)" ]
       else docConcat [ "static int nextIndex() { static int s_index = 0; return ++s_index; }" ])
 
-attrused = " __attribute__((used))"
-
-statDecl :: OutputCfg -> PP.Doc
-statDecl cfg =
-      docConcat [ "extern \"C\" struct { pid_t ppt_agent_pid; } _ppt_stat_", bufName cfg, attrused
-              ] <> PP.semi
-
-eachMod firstName cfg (GMSaveBuffer (LayoutIO sz off) mt) =
-  let qt = "\""
+moduleSource firstName cfg hasCounters (GMSaveBuffer (LayoutIO sz off) mt) =
+  let attrused = " __attribute__((used))"
+      statDecl cfg =
+        docConcat [ "extern \"C\" struct { pid_t ppt_agent_pid; } _ppt_stat_", bufName cfg, attrused
+                  ] <> PP.semi
   in PP.sep [
-    externDecl "const char*" ["_ppt_json", bufName cfg, attrused, "=", (qt ++ makeJSON cfg ++ qt)],
+    externDecl "const char*" ["_ppt_json", bufName cfg, attrused, "=", (enquote $ makeJSON cfg)],
     externDecl "int" ["_ppt_hmem", bufName cfg, attrused],
     statDecl cfg,
     staticDecl "int" ["_ppt_bufsz"],
@@ -452,13 +465,49 @@ eachMod firstName cfg (GMSaveBuffer (LayoutIO sz off) mt) =
     staticDecl firstName ["*_ppt_buf"],
     nextIdxFn firstName cfg,
     saveFn firstName cfg,
-    attachFn firstName cfg
+    attachFn firstName cfg hasCounters
     ]
 
-eachMod _ cfg GMCounters = PP.text "/* counters */"
+moduleSource firstName cfg _ GMCounters  =
+  -- A clear placeholder.
+  stmt "void setupCounters() {}"
+
+statLayouts :: [FrameLayout] -> (String, LayoutIOSpec)
+statLayouts flayouts= case flayouts of
+        [] -> ("void", LayoutIO  0 0)
+        (x:_) -> (flName x, layoutSpec x)
 
 modImpls :: OutputCfg -> String -> [GenModule] -> PP.Doc
-modImpls cfg firstName mods = PP.sep $ map (eachMod firstName cfg) mods
+modImpls cfg firstName mods =
+  PP.sep $ map (moduleSource firstName cfg hasCounters) mods
+  where
+    hasCounters = (length $ filter (== GMCounters) mods) > 0
+
+cpHeader :: EmitOptions -> [FrameLayout] -> (String, PP.Doc)
+cpHeader opts flayous =
+  let cfg = makeOutCfg opts flayous
+      frameDecls = map (makeFrameDecl cfg) flayous
+      isMultithreaded = erMultithread $ eRuntime opts
+      (firstName, lspec) = statLayouts flayous
+      mods = (GMSaveBuffer lspec isMultithreaded ):allModules frameDecls
+      headers = map enbracket $ moduleHeaders cfg frameDecls mods
+      classes = map (writeDecl cfg firstName) $ sequenceDecls frameDecls
+      body = (modDecls opts firstName mods):classes
+      fileName = (filePrefix cfg) ++ (bufName cfg) ++ (headerSuffix cfg)
+  in (fileName, fileWrap cfg headers body)
+
+cpSource :: EmitOptions -> [FrameLayout] -> (String, PP.Doc)
+cpSource opts flayous =
+  let cfg = makeOutCfg opts flayous
+      frameDecls = map (makeFrameDecl cfg) flayous
+      headerName = "\"" ++ (filePrefix cfg) ++ (bufName cfg) ++ (headerSuffix cfg) ++ "\""
+      (firstName, lspec) = statLayouts flayous
+      isMultithreaded = erMultithread $ eRuntime opts
+      mods = (GMSaveBuffer lspec isMultithreaded ):allModules frameDecls
+      headers = headerName: (map enquote $ moduleHeaders cfg frameDecls mods)
+      fileName = (filePrefix cfg) ++ (bufName cfg) ++ (sourceSuffix cfg)
+      body = modImpls cfg firstName mods
+  in (fileName, fileWrap cfg headers [body])
 
 cpFile :: EmitOptions -> [FrameLayout] -> PP.Doc
 {-
@@ -486,11 +535,8 @@ cpFile opts flayous =
         in map (\n -> pfx <> PP.text n <> sfx) headers
       ourModDelcs = modDecls opts firstName mods
       ourModImpls = modImpls cfg firstName mods
-      sequencedDecls =
-        if length frameDecls > 1
-        then map (\(frame, index) -> frame { cNr = Just index }) $ zip frameDecls [1..]
-        else frameDecls
+      classDecls = map (writeDecl cfg firstName) $ sequenceDecls frameDecls
       allDocs =
-        headerDocs ++ [ourModDelcs] ++ map (writeDecl cfg firstName) sequencedDecls ++ [ourModImpls]
+        headerDocs ++ [ourModDelcs] ++ classDecls ++ [ourModImpls]
   in PP.vcat allDocs
 
