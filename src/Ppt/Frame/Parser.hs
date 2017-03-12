@@ -1,17 +1,23 @@
+{-# LANGUAGE TemplateHaskell #-}
 module Ppt.Frame.Parser where -- (parseFile, compileFrame) where 
+
+import Ppt.Frame.ParsedRep
+import Control.Exception (handle)
+import Control.Lens hiding (element, noneOf)
+import Control.Monad
+import Control.Monad.Trans.Either
+import Data.Aeson (encode, decode)
+import Data.ByteString.Lazy.Char8 (pack, unpack)
+import Data.List
+import Data.Maybe (catMaybes, mapMaybe)
 import Text.ParserCombinators.Parsec (sepBy1, try, char, eof, many1, alphaNum,
                                       many, ParseError, digit, noneOf,
                                       string, (<|>), (<?>), GenParser)
 import Text.ParserCombinators.Parsec.Language (javaStyle)
 import Text.ParserCombinators.Parsec.Prim (parse)
+import qualified Data.HashMap.Strict as HM
+import qualified Control.Lens.Fold as CLF
 import qualified Text.ParserCombinators.Parsec.Token as P
-import Data.List
-import Control.Exception (handle)
-import Control.Monad
-import Control.Monad.Trans.Either
-import Data.Aeson (encode, decode)
-import Data.ByteString.Lazy.Char8 (pack, unpack)
-import Ppt.Frame.ParsedRep
 
 lexer :: P.TokenParser ()
 lexer = P.makeTokenParser
@@ -147,12 +153,18 @@ tagOption = do { resvd "tag"
                ; val <- possiblyQuotedString
                ; return (Tag key val) }
 
-data PartialOption = OptLang ELanguage
-                   | OptBuffer EBuffer
-                   | OptTime ETimeRep
-                   | OptRuntime ERuntime
-                   | OptTags [ETag]
+-- TODO(lally): EmitOptions *should* have each type of EOption as a
+-- full-fledged member (unless I leave it as a secondary 'misc'
+-- bucket, or a generator config, I donno.).  But right now I'm saving
+-- time to get this out.
+data PartialOption = OptLang { _lang :: ELanguage }
+                   | OptBuffer { _buffer :: EBuffer }
+                   | OptTime { _time :: ETimeRep }
+                   | OptRuntime { _runtime :: ERuntime }
+                   | OptTags { _tags :: [ETag] }
+
                    deriving (Eq, Show)
+makeLenses ''PartialOption
 
 optionParser :: Parser PartialOption
 optionParser = (do { resvd "time"
@@ -171,13 +183,6 @@ optionParser = (do { resvd "time"
                        ; return (OptTags [tag]) })
                <?> "option type: time, runtime, tag"
 
-optionSplitter :: PartialOption -> ([ELanguage], [EBuffer], [ETimeRep], [ERuntime], [[ETag]])
-optionSplitter (OptLang l)    = ([l], [], [], [], [])
-optionSplitter (OptBuffer b)  = ([], [b], [], [], [])
-optionSplitter (OptTime t)    = ([], [], [t], [], [])
-optionSplitter (OptRuntime r) = ([], [], [], [r], [])
-optionSplitter (OptTags ts)   = ([], [], [], [], [ts])
-
 {-
 defaultEmit = EmitOptions { eBuffer = (EBuffer "unlisted" Nothing)
                           , eLanguage = ELangCpp
@@ -186,32 +191,80 @@ defaultEmit = EmitOptions { eBuffer = (EBuffer "unlisted" Nothing)
                           , eTags = []
                           , eOptions = []}
 -}
+min1 :: [a] -> String -> Either String a
+min1 (x:_)  _ = Right x
+min1 [] name = Left (name ++ " required")
+
+max1 :: [a] -> String -> a -> Either String a
+max1 (x:[]) _ _ = Right x
+
+max1 [] _ def = Right def
+max1 _ name def = Left ("Only 1 " ++ name ++ " allowed")
+
+exact1 :: [a] -> String -> Either String a
+exact1 (x:[]) _  = Right x
+exact1 _ name = Left ("Exactly 1 " ++ name ++ " required")
+
+
 optionCombine :: [PartialOption] -> Either String EmitOptions
 optionCombine opts = let
-  addUp (a, b, c, d, e) (f, g, h, i, j) =
-    (a ++ f, b ++ g, c ++ h, d ++ i, e ++ j)
-  (langs, buffers, timereps, runtimes, rawTags) =
-    foldl' addUp ([], [], [], [], []) (
-    map optionSplitter opts)
-  tags = concat rawTags
-  min1 :: [a] -> String -> Either String a
-  min1 (x:_)  _ = Right x
-  min1 [] name = Left (name ++ " required")
-  max1 :: [a] -> String -> a -> Either String a
-  max1 (x:[]) _ _ = Right x
-  max1 [] _ def = Right def
-  max1 _ name def = Left ("Only 1 " ++ name ++ " allowed")
-  exact1 :: [a] -> String -> Either String a
-  exact1 (x:[]) _  = Right x
-  exact1 _ name = Left ("Exactly 1 " ++ name ++ " required")
+  langs = catMaybes $ map (preview lang) opts
+  buffers = catMaybes $ map (preview buffer) opts
+  timereps = catMaybes $ map (preview time) opts
+  runtimes = catMaybes $ map (preview runtime) opts
+  theTags = concat $  catMaybes $ map (preview tags) opts
   in (EmitOptions
       <$> max1 buffers "buffer line" (EBuffer "unlisted" Nothing)
       <*> exact1 langs "Language"
-      <*> max1 timereps "time representation" (
+      <*> max1 timereps "Time representation" (
          ETimeSpec ETimeClockMonotonic)
       <*> max1 runtimes "multithread option" (ERuntime False)
-      <*> (pure tags)
+      <*> (pure theTags)
       <*> (pure []))
+
+optionUpdate :: EmitOptions -> [PartialOption] -> EmitOptions
+optionUpdate base opts =
+  let mLast [] = Nothing
+      mLast xs = Just (last xs)
+      -- Pattern:
+      -- 'ins' here will be 'opts' above.
+      replace inpl outl ins outs =
+        let override = lastOf (traverse . inpl) ins
+        in maybe (view outl outs) id override
+      concatenate inpl outl ins outs =
+        catMaybes [preview outl outs, preview inpl ins]
+--      replace :: Getting a b -> Getting u v c d -> s -> u -> s
+--      replace inpl outl oss bs =
+--        let last = mLast $ catMaybes $ map (preview inpl) oss
+--        in maybe (view oss bs) id last
+    -- map preview to oss, then get last Just.
+--    let last = {- needs maybe -} CL.lastOf $ concatMap (preview inpl) oss
+--    maybe (view outl bs) id (preview inpl os)
+      updateTags ins outs =
+        let decompose (Tag k v) = (k, v)
+            compose (k, v) = Tag k v
+            origTags :: HM.HashMap String String
+            origTags = HM.fromList $ map decompose $ view eTags outs
+            newTags :: [(String, String)]
+            newTags = map decompose $ concat $ mapMaybe (preview tags) ins
+            combined = foldl (\hm (k, v) -> HM.insert k v hm) origTags newTags
+        in map compose $ HM.toList combined
+
+--    let untag (Tag k v) = (k, v)
+--        orig = HM.fromList $ map untag (view outl bs)
+--        new = HM.fromList $ map untag $ concatMap 
+--    in HM.union  new orig
+      langs = catMaybes $ map (preview lang) opts
+      lang_ = replace lang eLanguage opts base
+      buffers = catMaybes $ map (preview buffer) opts
+      buffer_ = replace buffer eBuffer opts base
+      timereps = catMaybes $ map (preview time) opts
+      timeRep_ = replace time eTimeRep opts base
+      runtimes = catMaybes $ map (preview runtime) opts
+      runtime_ = replace runtime eRuntime opts base
+      theTags = concat $  catMaybes $ map (preview tags) opts
+      tags_ = updateTags opts base
+  in EmitOptions buffer_ lang_ timeRep_ runtime_  tags_ (_eOptions base)
 
 parseHead :: Parser PartialOption
 parseHead = (resvd "option" >> optionParser)

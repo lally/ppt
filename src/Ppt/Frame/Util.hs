@@ -43,18 +43,18 @@ parseFrame str =
   let res = tparse frame str
   in rcompose res show (\n -> compileFrames x64 opts [n])
 
-genFrame :: String -> Either String PP.Doc
+genFrame :: String -> Either String [(String, PP.Doc)]
 genFrame str =
   let parseRes = parseFrame str
-  in bimap parseRes id (cpFile opts)
+  in bimap parseRes id (cppFiles opts)
 
 ls :: Show a => Either a b -> Either String b
 ls (Left s) = Left (show s)
 ls (Right r) = Right r
 
-genFile :: String -> Either String PP.Doc
+genFile :: String -> Either String [(String, PP.Doc)]
 genFile str = do
   (Buffer emitopts frames) <- ls $ tparse fileParser str
   compiled <- compileFrames x64 emitopts frames
-  return $ cpFile emitopts compiled
+  return $ cppFiles emitopts compiled
 

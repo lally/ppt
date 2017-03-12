@@ -1,8 +1,10 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Ppt.Frame.ParsedRep where
 import GHC.Generics
 import Data.Aeson
+import Control.Lens hiding (element, noneOf)
 {- |Parsing, Calculation, and Layout
 
  Ppt builds a buffer specification from its individual Frames.  It
@@ -48,13 +50,14 @@ data EOption = ENamespace [String]
              | EFilePrefix String
              deriving (Generic, Eq, Show)
 
-data EmitOptions = EmitOptions { eBuffer ::EBuffer
-                               , eLanguage :: ELanguage
-                               , eTimeRep :: ETimeRep
-                               , eRuntime:: ERuntime
-                               , eTags :: [ETag]
-                               , eOptions :: [EOption] }
+data EmitOptions = EmitOptions { _eBuffer ::EBuffer
+                               , _eLanguage :: ELanguage
+                               , _eTimeRep :: ETimeRep
+                               , _eRuntime:: ERuntime
+                               , _eTags :: [ETag]
+                               , _eOptions :: [EOption] }
                    deriving (Generic, Eq, Show)
+makeLenses ''EmitOptions
 
 -- |Literal data members of the Frame.  These can be single,
 -- standalone members /or/ a differential.  In the latter case, a

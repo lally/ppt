@@ -5,14 +5,15 @@ import Ppt.Configuration
 import Ppt.Frame.ParsedRep
 import Ppt.Frame.Layout
 
-import System.FilePath
-import qualified Data.Set as S
-import qualified Data.List as L
-
-import qualified Text.PrettyPrint as PP
 import Text.PrettyPrint ((<>),(<+>))
 import Data.Aeson (encode)
 import Data.ByteString.Lazy.Char8 (unpack)
+
+import System.FilePath
+import qualified Data.Set as S
+import qualified Data.List as L
+import qualified Control.Lens as CL
+import qualified Text.PrettyPrint as PP
 {-
 For input:
   option clock timeval monotonic;
@@ -237,13 +238,20 @@ makeJSON cfg =
 structDecl :: OutputCfg -> String -> [(String, String)] -> PP.Doc
 structDecl cfg name members =
   let leftwidth :: Int
-      leftwidth = foldl max 0 $ map (length . fst) members
+      leftwidth = 1 + (foldl max 0 $ map (length . fst) members)
       -- type, member
-      formatMem (t, m) = (PP.sizedText leftwidth t) <> PP.text m <> PP.semi
+      formatMem (t, m) = (PP.text t PP.$$ (PP.nest leftwidth $ PP.text m)) <> PP.semi
   in blockdecl cfg (docConcatSp [ "struct",  name ]) PP.empty $ map formatMem members
 
 externDecl :: String -> [String] -> PP.Doc
 externDecl typ nameMems = docConcatSp [ "extern \"C\"", typ, L.intercalate "_" nameMems ] <> PP.semi
+
+externDecl' :: String -> [String] -> PP.Doc
+externDecl' typ nameMems = docConcatSp [ "extern \"C\"", typ, L.intercalate "_" nameMems ]
+
+externDeclAttr :: String -> [String] -> String -> PP.Doc
+externDeclAttr typ nameMems attr = docConcatSp [ "extern \"C\"", typ, L.intercalate "_" nameMems,
+                                                 attr ] <> PP.semi
 
 staticDecl :: String -> [String] -> PP.Doc
 staticDecl typ nameMems =
@@ -267,12 +275,12 @@ controlDecl cfg =
 fileWrap :: OutputCfg -> [String] -> [PP.Doc] -> PP.Doc
 fileWrap cfg headers body =
         let hpfx = PP.text "#include "
-            nsFront = PP.text "namespace {"
+            nsFront = PP.text "namespace"
             nsBack = PP.char '}'
             headerBlock =  map (\n -> hpfx <> PP.text n) headers
             namespaces = namespace cfg
             nsName = PP.text $ L.intercalate "::" namespaces
-            nsPrefix = map (\s -> nsFront <> PP.text s)  namespaces
+            nsPrefix = map (\s -> nsFront <+> PP.text s <+> PP.char '{')  namespaces
             nsSuffix =
               (mconcat $ take (length namespaces) $ repeat nsBack) <+> (
               (PP.text "// namespace ") <> nsName)
@@ -351,27 +359,13 @@ moduleHeaders :: OutputCfg -> [Decl] -> [GenModule] -> [String]
 moduleHeaders cfg decls mods =
   let declsOf (ClassDecl _ _ _ _ h _) = h
       modsOf GMCounters = []
-      modsOf (GMSaveBuffer _ _) = ["sys/types.h", "sys/shm.h", "unistd.h"] ++
-        if multithreadWrite cfg
-        then ["atomic"]
-        else []
+      modsOf (GMSaveBuffer _ _) = ["string.h", "sys/types.h", "sys/shm.h", "unistd.h", "atomic"]
   in S.toList $ S.fromList $ (concatMap declsOf decls) ++ (concatMap modsOf mods)
 
 allModules :: [Decl] -> [GenModule]
 allModules decls =
   let modsOf (ClassDecl _ _ _ _ _ m) = m
   in S.toList $ S.fromList $ concatMap modsOf decls
-
-modDecls :: EmitOptions -> String -> [GenModule] -> PP.Doc
-modDecls opts firstName mods =
---  PP.text $ "/* Insert  decls for runtime here: " ++ (L.intercalate ", " $ map show mods) ++ " */"
-  let eachMod mod = case mod of
-                      GMSaveBuffer (LayoutIO sz off) mt ->
-                        PP.vcat $ [ docConcat ["class ", firstName, ";"],
-                                    docConcatSp ["void","save(const", firstName, "* buf);"],
-                                    docConcatSp ["int", "nextIndex();"]]
-                      GMCounters -> PP.text "/* counters */"
-  in mconcat $ map eachMod mods
 
 saveFn :: String -> OutputCfg -> PP.Doc
 saveFn firstName cfg =
@@ -396,6 +390,19 @@ saveFn firstName cfg =
        PP.empty
     ]
   where writeBarrier = PP.text "std::atomic_thread_fence(std::memory_order_release)"
+
+modDecls :: OutputCfg -> String -> [GenModule] -> PP.Doc
+modDecls cfg firstName mods =
+--  PP.text $ "/* Insert  decls for runtime here: " ++ (L.intercalate ", " $ map show mods) ++ " */"
+  let eachMod mod = case mod of
+                      GMSaveBuffer (LayoutIO sz off) mt ->
+                        PP.vcat $ [ docConcat ["class ", firstName, ";"],
+                                    staticDecl firstName ["*_ppt_buf"],
+                                    staticDecl "int" ["_ppt_bufsz"],
+                                    saveFn firstName cfg,
+                                    docConcatSp ["int", "nextIndex();"]]
+                      GMCounters -> PP.text "/* counters */"
+  in mconcat $ map eachMod mods
 
 attachFn :: String -> OutputCfg -> Bool -> PP.Doc
 attachFn firstName cfg hasCounters =
@@ -428,13 +435,17 @@ attachFn firstName cfg hasCounters =
                 else []) ++
             [stmt "return true"
             ]),
-        blockdecl cfg (docConcat ["else if (_ppt_buf && !_ppt_hmem_",buf,")"]) PP.empty [
+        blockdecl cfg (docConcat ["else if (_ppt_buf && !_ppt_hmem_",buf,")"]) PP.empty ([
             blockdecl cfg (PP.text "if (shmdt(_ppt_buf) != 0)") PP.semi [
                 docConcat ["perror(\"failed ppt detach of ",buf,": shmdt\")"]
                 ],
             stmt "_ppt_buf = nullptr",
-            docConcat ["_ppt_hmem_", buf, " = 0"] <> PP.semi
-            ],
+            docConcat ["_ppt_hmem_", buf, " = 0"] <> PP.semi]
+            ++ (if hasCounters
+                then [stmt "closeCounters()"]
+                else []) ++
+            [
+            ]),
             stmt "return false"
         ]
     where buf = bufName cfg
@@ -453,24 +464,21 @@ moduleSource firstName cfg hasCounters (GMSaveBuffer (LayoutIO sz off) mt) =
         docConcat [ "extern \"C\" struct { pid_t ppt_agent_pid; } _ppt_stat_", bufName cfg, attrused
                   ] <> PP.semi
   in PP.sep [
-    externDecl "const char*" ["_ppt_json", bufName cfg, attrused, "=", (enquote $ makeJSON cfg)],
-    externDecl "int" ["_ppt_hmem", bufName cfg, attrused],
+    PP.hsep [externDecl' "const char*" ["_ppt_json", bufName cfg],
+             PP.text attrused, PP.text "=", PP.text (enquote $ makeJSON cfg)] <> PP.semi,
+    externDeclAttr "int" ["_ppt_hmem", bufName cfg] attrused,
     statDecl cfg,
-    staticDecl "int" ["_ppt_bufsz"],
-    -- The _mem member points to our control block (mapped in).  The _buf member points to our
-    -- array.  For non-resizable configurations, these both point into the same shared memory
-    -- segment.
     controlDecl cfg,
     staticDecl "ppt_control" ["*_ppt_ctrl"],
-    staticDecl firstName ["*_ppt_buf"],
     nextIdxFn firstName cfg,
-    saveFn firstName cfg,
     attachFn firstName cfg hasCounters
     ]
 
-moduleSource firstName cfg _ GMCounters  =
+moduleSource firstName cfg _ GMCounters  = PP.vcat [
   -- A clear placeholder.
-  stmt "void setupCounters() {}"
+  stmt "void setupCounters() {}",
+  stmt "void closeCounters() {}"
+  ]
 
 statLayouts :: [FrameLayout] -> (String, LayoutIOSpec)
 statLayouts flayouts= case flayouts of
@@ -483,60 +491,29 @@ modImpls cfg firstName mods =
   where
     hasCounters = (length $ filter (== GMCounters) mods) > 0
 
-cpHeader :: EmitOptions -> [FrameLayout] -> (String, PP.Doc)
-cpHeader opts flayous =
-  let cfg = makeOutCfg opts flayous
-      frameDecls = map (makeFrameDecl cfg) flayous
-      isMultithreaded = erMultithread $ eRuntime opts
-      (firstName, lspec) = statLayouts flayous
-      mods = (GMSaveBuffer lspec isMultithreaded ):allModules frameDecls
-      headers = map enbracket $ moduleHeaders cfg frameDecls mods
-      classes = map (writeDecl cfg firstName) $ sequenceDecls frameDecls
-      body = (modDecls opts firstName mods):classes
+cppHeader :: OutputCfg -> String -> [Decl] -> [GenModule] -> [String] -> (FilePath, PP.Doc)
+cppHeader cfg firstName frameDecls mods headers =
+  let classes = map (writeDecl cfg firstName) $ sequenceDecls frameDecls
+      body = (modDecls cfg firstName mods):classes
       fileName = (filePrefix cfg) ++ (bufName cfg) ++ (headerSuffix cfg)
   in (fileName, fileWrap cfg headers body)
 
-cpSource :: EmitOptions -> [FrameLayout] -> (String, PP.Doc)
-cpSource opts flayous =
-  let cfg = makeOutCfg opts flayous
-      frameDecls = map (makeFrameDecl cfg) flayous
-      headerName = "\"" ++ (filePrefix cfg) ++ (bufName cfg) ++ (headerSuffix cfg) ++ "\""
-      (firstName, lspec) = statLayouts flayous
-      isMultithreaded = erMultithread $ eRuntime opts
-      mods = (GMSaveBuffer lspec isMultithreaded ):allModules frameDecls
-      headers = headerName: (map enquote $ moduleHeaders cfg frameDecls mods)
+cppSource :: OutputCfg -> String -> [Decl] -> [GenModule] -> [String] -> (FilePath, PP.Doc)
+cppSource cfg firstName frameDecls mods baseHeaders =
+  let headerName = "\"" ++ (filePrefix cfg) ++ (bufName cfg) ++ (headerSuffix cfg) ++ "\""
+      headers = headerName: baseHeaders
       fileName = (filePrefix cfg) ++ (bufName cfg) ++ (sourceSuffix cfg)
       body = modImpls cfg firstName mods
   in (fileName, fileWrap cfg headers [body])
 
-cpFile :: EmitOptions -> [FrameLayout] -> PP.Doc
-{-
- Derivation Process
- - Get declarations for frames
- - Get declarations for default runtimes
- - get declarations for enabled modules
- - Get headers and emit
- - Emit declarations for runtimes and modules and 
- - Emit decls (with inline definitions) for Classes (frames)
- - Emit definitions for runtime and enabled modules
--}
-cpFile opts flayous =
+cppFiles :: EmitOptions -> [FrameLayout] -> [(FilePath, PP.Doc)]
+cppFiles opts flayous =
   let cfg = makeOutCfg opts flayous
       frameDecls = map (makeFrameDecl cfg) flayous
-      isMultithreaded = erMultithread $ eRuntime opts
-      (firstName, lspec) = case flayous of
-        [] -> ("void", LayoutIO  0 0)
-        (x:_) -> (flName x, layoutSpec x)
+      isMultithreaded = erMultithread $ CL.view eRuntime opts
+      (firstName, lspec) = statLayouts flayous
       mods = (GMSaveBuffer lspec isMultithreaded ):allModules frameDecls
-      headers = moduleHeaders cfg frameDecls mods
-      headerDocs =
-        let pfx = PP.text "#include <"
-            sfx = PP.char '>'
-        in map (\n -> pfx <> PP.text n <> sfx) headers
-      ourModDelcs = modDecls opts firstName mods
-      ourModImpls = modImpls cfg firstName mods
-      classDecls = map (writeDecl cfg firstName) $ sequenceDecls frameDecls
-      allDocs =
-        headerDocs ++ [ourModDelcs] ++ classDecls ++ [ourModImpls]
-  in PP.vcat allDocs
+      headers = map enbracket $ moduleHeaders cfg frameDecls mods
+  in [cppHeader cfg firstName frameDecls mods headers,
+      cppSource cfg firstName frameDecls mods headers]
 
