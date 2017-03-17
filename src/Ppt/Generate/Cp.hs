@@ -146,18 +146,7 @@ writeDecl cfg firstName (ClassDecl name typeIdx clsMems clsMeths _ _) =
           PubMember _ -> []
           PrivMember _ -> [docPublic]
       memBody = qualBlock cfg clsMems
-      saveMethod = blockdecl cfg (PP.text "void save()")  PP.semi  (
-        [ "int index = nextIndex()",
-          "__ppt_seqno = index",
-          "__ppt_seqno_back = index" ] ++
-        (case typeIdx of
-          Nothing -> []
-          Just idx -> [PP.text $ "__ppt_type = " ++ show idx]) ++ [
-        if (name /= firstName)
-        then PP.text $ concat ["save(reinterpret_cast<", firstName, "*>(this))"]
-        else PP.text "save(this)"
-        ])
-      withMeths meths = (publicTail clsMems) ++ (indentify cfg (saveMethod:clsMeths))
+      withMeths meths = (publicTail clsMems) ++ (indentify cfg ((saveFn firstName cfg typeIdx):clsMeths)) 
   in PP.vcat ((tag <+> PP.lbrace):( memBody ++ (withMeths clsMeths)) ++ [
     PP.rbrace <> PP.semi])
 
@@ -190,7 +179,7 @@ cppOpts _ = (".cc", ".hh", "ppt-", ["ppt"])
 makeOutCfg :: EmitOptions -> [FrameLayout] -> OutputCfg
 makeOutCfg e@(EmitOptions b _ ETimeVal (ERuntime mt) _ eOpts) flayouts=
   let (ssfx, hsfx, fpfx, ns) = cppOpts eOpts
-  in (OutputCfg "struct timespec" "time.h" (\var -> PP.text $ "time(&" ++ var ++ ")") 4 True mt
+  in (OutputCfg "struct timeval" "time.h" (\var -> PP.text $ "time(&" ++ var ++ ")") 4 True mt
    (ebName b) ssfx hsfx fpfx ns e flayouts)
 
 makeOutCfg e@(EmitOptions b _ (ETimeSpec src) (ERuntime mt) _ eOpts) flayouts =
@@ -204,7 +193,7 @@ makeOutCfg e@(EmitOptions b _ (ETimeSpec src) (ERuntime mt) _ eOpts) flayouts =
         ETimeClockBoottime ->         "CLOCK_BOOTTIME"
         ETimeClockProcessCputimeId -> "CLOCK_PROCESS_CPUTIME_ID"
         ETimeClockThreadCputimeId ->  "CLOCK_THREAD_CPUTIME_ID"
-  in (OutputCfg "struct timeval" "time.h" (
+  in (OutputCfg "struct timespec" "time.h" (
          \var -> PP.text $ "clock_gettime(" ++ clock ++ ", &" ++ var ++ ")")
        4 True mt (ebName b) ssfx hsfx fpfx ns e flayouts)
 
@@ -241,7 +230,7 @@ structDecl cfg name members =
       leftwidth = 1 + (foldl max 0 $ map (length . fst) members)
       -- type, member
       formatMem (t, m) = (PP.text t PP.$$ (PP.nest leftwidth $ PP.text m)) <> PP.semi
-  in blockdecl cfg (docConcatSp [ "struct",  name ]) PP.empty $ map formatMem members
+  in mconcat [blockdecl cfg (docConcatSp [ "struct",  name ]) PP.empty $ map formatMem members, PP.semi]
 
 externDecl :: String -> [String] -> PP.Doc
 externDecl typ nameMems = docConcatSp [ "extern \"C\"", typ, L.intercalate "_" nameMems ] <> PP.semi
@@ -359,7 +348,8 @@ moduleHeaders :: OutputCfg -> [Decl] -> [GenModule] -> [String]
 moduleHeaders cfg decls mods =
   let declsOf (ClassDecl _ _ _ _ h _) = h
       modsOf GMCounters = []
-      modsOf (GMSaveBuffer _ _) = ["string.h", "sys/types.h", "sys/shm.h", "unistd.h", "atomic"]
+      modsOf (GMSaveBuffer _ _) = ["string.h", "sys/types.h", "sys/shm.h", "unistd.h", "atomic", "stdio.h",
+                                   "linux/perf_event.h", "linux/hw_breakpoint.h" ]
   in S.toList $ S.fromList $ (concatMap declsOf decls) ++ (concatMap modsOf mods)
 
 allModules :: [Decl] -> [GenModule]
@@ -367,11 +357,17 @@ allModules decls =
   let modsOf (ClassDecl _ _ _ _ _ m) = m
   in S.toList $ S.fromList $ concatMap modsOf decls
 
-saveFn :: String -> OutputCfg -> PP.Doc
-saveFn firstName cfg =
-    blockdecl cfg (docConcat ["void save(const ", firstName, " * buf, int index)"])  PP.empty [
+saveFn :: String -> OutputCfg -> Maybe Int -> PP.Doc
+saveFn firstName cfg typeIdx =
+    blockdecl cfg (docConcat ["void save()"])  PP.empty [
        blockdecl cfg (docConcat [ "if (_ppt_buf || (_ppt_hmem_",
-                                  firstName," && try_attach()))"]) PP.semi $ concat [
+                                  (bufName cfg)," && try_attach()))"]) PP.semi $ concat [
+           [ "int index = nextIndex()",
+             "__ppt_seqno = index",
+             "__ppt_seqno_back = index" ] ++
+           (case typeIdx of
+              Nothing -> []
+              Just idx -> [PP.text $ "__ppt_type = " ++ show idx]) ++
            [ PP.text "int modidx = index % _ppt_bufsz" ],
            (if multithreadWrite cfg
             then [PP.text "_ppt_buf[modidx].__ppt_seqno = 0",
@@ -380,8 +376,8 @@ saveFn firstName cfg =
             else []),
            [ PP.text "_ppt_buf[modidx].__ppt_seqno = modidx",
              writeBarrier,
-             PP.text ("memcpy(&_ppt_buf[modidx], buf + sizeof(buf->__ppt_seqno), " ++
-                       "sizeof(*buf) - 2*sizeof(buf->__ppt_seqno))"),
+             PP.text ("memcpy(&_ppt_buf[modidx], this + sizeof(__ppt_seqno), " ++
+                       "sizeof(*this) - 2*sizeof(__ppt_seqno))"),
              writeBarrier,
              PP.text "_ppt_buf[modidx].__ppt_seqno_back = modidx",
              writeBarrier
@@ -397,12 +393,18 @@ modDecls cfg firstName mods =
   let eachMod mod = case mod of
                       GMSaveBuffer (LayoutIO sz off) mt ->
                         PP.vcat $ [ docConcat ["class ", firstName, ";"],
+                                    externDecl "int" ["_ppt_hmem", bufName cfg],
                                     staticDecl firstName ["*_ppt_buf"],
                                     staticDecl "int" ["_ppt_bufsz"],
-                                    saveFn firstName cfg,
+                                    PP.text "bool try_attach();",
+                                    docConcat ["class ", firstName, ";"],
                                     docConcatSp ["int", "nextIndex();"]]
                       GMCounters -> PP.text "/* counters */"
   in mconcat $ map eachMod mods
+
+
+modInlineDefs :: OutputCfg -> String -> [GenModule] -> PP.Doc
+modInlineDefs cfg firstName mods = PP.empty
 
 attachFn :: String -> OutputCfg -> Bool -> PP.Doc
 attachFn firstName cfg hasCounters =
@@ -416,19 +418,19 @@ attachFn firstName cfg hasCounters =
                 PP.text "return false"
                 ],
             docConcat ["off_t elem_offset = sizeof(ppt_control) + (sizeof(ppt_control) % sizeof(",
-                       firstName, "))"],
-            docConcat ["_ppt_control = reinterpret_cast<",firstName,"*>(shmat(_ppt_hmem_",
+                       firstName, "));"],
+            docConcat ["_ppt_ctrl = reinterpret_cast<ppt_control*>(shmat(_ppt_hmem_",
                        buf,", nullptr, 0))"] <> PP.semi,
-            blockdecl cfg (PP.text "if (_ppt_control == nullptr)") PP.semi [
+            blockdecl cfg (PP.text "if (_ppt_ctrl == nullptr)") PP.semi [
                 docConcat ["perror(\"failed ppt attach of ", buf, ": shmat\")"],
                 docConcat ["_ppt_hmem_",buf," = 0"],
                 PP.text "return false"
                 ],
-            stmt "_ppt_buf = _ppt_control + elem_offset",
-            stmt "_ppt_control->data_block = _ppt_buf",
-            docConcat ["_ppt_control->data_block_sz = (ds.shm_segsz - elem_offset) / sizeof(",
+            docConcat ["_ppt_buf = reinterpret_cast<", firstName, "*>(reinterpret_cast<uint8_t*>(_ppt_ctrl) + elem_offset);"],
+            stmt "_ppt_ctrl->data_block = _ppt_buf",
+            docConcat ["_ppt_ctrl->data_block_sz = (ds.shm_segsz - elem_offset) / sizeof(",
                        firstName,")" ] <> PP.semi,
-            docConcat ["_ppt_control->data_block_hmem_attached = _ppt_hmem_",
+            docConcat ["_ppt_ctrl->data_block_hmem_attached = _ppt_hmem_",
                        buf ] <> PP.semi]
             ++ (if hasCounters
                 then [stmt "setupCounters()"]
@@ -453,26 +455,28 @@ attachFn firstName cfg hasCounters =
 nextIdxFn :: String -> OutputCfg -> PP.Doc
 nextIdxFn firstName cfg =
     (if multithreadWrite cfg
-      then blockdecl cfg (PP.text "static int nextIndex()") PP.semi [
+      then blockdecl cfg (PP.text "int nextIndex()") PP.semi [
                        "static std::atomic<int> s_index(1)",
-                       "return std::fetch_add(&s_index, 1, std::memory_order_release)" ]
-      else docConcat [ "static int nextIndex() { static int s_index = 0; return ++s_index; }" ])
+                       "return s_index.fetch_add(1, std::memory_order_release)" ]
+      else docConcat [ "int nextIndex() { static int s_index = 0; return ++s_index; }" ])
 
 moduleSource firstName cfg hasCounters (GMSaveBuffer (LayoutIO sz off) mt) =
   let attrused = " __attribute__((used))"
       statDecl cfg =
-        docConcat [ "extern \"C\" struct { pid_t ppt_agent_pid; } _ppt_stat_", bufName cfg, attrused
-                  ] <> PP.semi
-  in PP.sep [
-    PP.hsep [externDecl' "const char*" ["_ppt_json", bufName cfg],
+        [ docConcat [ "struct ppt_stat_t { pid_t ppt_agent_pid; }"] <> PP.semi,
+          externDecl "ppt_stat_t" ["_ppt_stat", bufName cfg] <> PP.semi,
+          docConcat ["ppt_stat_t _ppt_stat_", bufName cfg, attrused] <> PP.semi]
+  in PP.sep ([
+    externDecl "const char*" ["_ppt_json", bufName cfg],
+    PP.hsep [docConcat ["const char* _ppt_json_", bufName cfg],
              PP.text attrused, PP.text "=", PP.text (enquote $ makeJSON cfg)] <> PP.semi,
-    externDeclAttr "int" ["_ppt_hmem", bufName cfg] attrused,
-    statDecl cfg,
-    controlDecl cfg,
-    staticDecl "ppt_control" ["*_ppt_ctrl"],
-    nextIdxFn firstName cfg,
-    attachFn firstName cfg hasCounters
-    ]
+    docConcat ["int _ppt_hmem_", bufName cfg, " ", attrused, ";"]]
+     ++ statDecl cfg ++
+    [ controlDecl cfg,
+      staticDecl "ppt_control" ["*_ppt_ctrl"],
+      nextIdxFn firstName cfg,
+      attachFn firstName cfg hasCounters
+    ])
 
 moduleSource firstName cfg _ GMCounters  = PP.vcat [
   -- A clear placeholder.
@@ -494,7 +498,7 @@ modImpls cfg firstName mods =
 cppHeader :: OutputCfg -> String -> [Decl] -> [GenModule] -> [String] -> (FilePath, PP.Doc)
 cppHeader cfg firstName frameDecls mods headers =
   let classes = map (writeDecl cfg firstName) $ sequenceDecls frameDecls
-      body = (modDecls cfg firstName mods):classes
+      body = ((modDecls cfg firstName mods):PP.empty:classes) ++ [PP.empty, modInlineDefs cfg firstName mods]
       fileName = (filePrefix cfg) ++ (bufName cfg) ++ (headerSuffix cfg)
   in (fileName, fileWrap cfg headers body)
 

@@ -28,7 +28,7 @@ runCommand args cfg = do
   if (length args) == 0 then showHelp else
     case head args of
       "gen" -> Gen.generate (tail args) cfg
-      "generate" -> Gen.generate (tail args) cfg
+      "generate" -> Gen.generateCommand (tail args)
       "attach" -> Agent.attach (tail args) cfg
       "?" -> showHelp
       "help" -> showHelp

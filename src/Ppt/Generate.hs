@@ -215,6 +215,7 @@ x64Layout = L.TargetInfo 8 4 4 16 8 4
 generateCommand :: [String] -> IO ()
 generateCommand args =
   let opts = splitOptionGroups args
+  -- The following should all be in a runEitherT $ do...
   in case opts of
     Nothing -> putStrLn "ppt generate <usage>"
     Just (groups, fname) -> do
