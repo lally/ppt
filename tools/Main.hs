@@ -1,6 +1,6 @@
 module Main where
 
-import Ppt.Configuration (RunConfig, cfgTarget)
+import Ppt.Configuration (RunConfig(..), cfgTarget, MachineTarget(..))
 import qualified Ppt.SIParser as Parse
 import qualified Ppt.Agent as Agent
 import qualified Ppt.StaticInstrumentation as Inst
@@ -39,7 +39,9 @@ runCommand args cfg = do
 main = do
   -- TODO: Look at the command first.
   args <- getArgs
-  if (length args) == 0 then showHelp else
+  let cfg = RunConfig "/" Target64
+  runCommand args cfg
+{-  if (length args) == 0 then showHelp else
     case head args of
       "init" -> do
                 cfg <- S.createConfig
@@ -51,3 +53,4 @@ main = do
                     Just cfg -> do
                               -- L.initialize
                               runCommand args cfg
+-}

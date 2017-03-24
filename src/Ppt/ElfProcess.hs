@@ -112,32 +112,23 @@ setIntegerInProcess pi sym value =
          return $ fromIntegral value)
      return $ maybe False (\a -> a == 0) ret
 
-{-
-cintToBS :: CULong -> BS.ByteString
-cintToBS value
-  | value && 0xFF00 0000 0000 0000 == 0 = BS.empty
-  | value && 0x00FF 0000 0000 0000 == 0 = BS.singleton (ord $ fromIntegral $ 0xff && value >> 48)
-  | value && 0x0000 FF00 0000 0000 == 0 = BS.pack [ord $ fromIntegral $ value >> 48,
-                                                   ord $ fromIntegral $ value >> 40]
-  | value && 0x0000 00FF 0000 0000 == 0 = BS.pack [ord $ fromIntegral $ value >> 48,
-                                                   ord $ fromIntegral $ value >> 40,
-                                                   ord $ fromIntegral $ value >> 32]
-  | value && 0x0000 0000 FF00 0000 == 0 = BS.pack [ord $ fromIntegral $ value >> 48,
-                                                   ord $ fromIntegral $ value >> 40,
-                                                   ord $ fromIntegral $ value >> 32,
-                                                   ord $ fromIntegral $ value >> 24]
-  | value && 0x0000 0000 00FF 0000 == 0 = BS.pack [ord $ fromIntegral $ value >> 48,
-                                                   ord $ fromIntegral $ value >> 40,
-                                                   ord $ fromIntegral $ value >> 32,
-                                                   ord $ fromIntegral $ value >> 24,
-                                                   ord $ fromIntegral $ value >> 16]
-  | value && 0x0000 0000 00FF 0000 == 0 = BS.pack [ord $ fromIntegral $ value >> 48,
-                                                   ord $ fromIntegral $ value >> 40,
-                                                   ord $ fromIntegral $ value >> 32,
-                                                   ord $ fromIntegral $ value >> 24,
-                                                   ord $ fromIntegral $ value >> 16,
-                                                   ord $ fromIntegral $ value >> 8]
--}
+swapIntegerInProcess :: Int -> E.ElfSymbolTableEntry -> Int -> Int -> IO (Maybe Int)
+swapIntegerInProcess pi sym oldValue newValue =
+  do let addr = fromIntegral $ E.steValue sym
+         rawVal = fromIntegral newValue
+         coldValue = fromIntegral oldValue
+     ret <- runInPtrace pi (\pid -> do
+         value <- [CU.block| int {
+                      int result = ptrace(PTRACE_POKEDATA, $(int pid), (void *) $(uintptr_t addr),
+                                           $(int rawVal));
+                      if (result == $(int coldValue)) {
+                           ptrace(PTRACE_POKEDATA, $(int pid), (void *) $(uintptr_t addr), $(int rawVal));
+                           return $(int rawVal);
+                      } else {
+                           return result;
+                      } }|]
+         return $ fromIntegral value)
+     return ret
 
 stringInProcess :: Int -> E.ElfSymbolTableEntry -> IO (Maybe BS.ByteString)
 stringInProcess pi sym =
@@ -151,5 +142,3 @@ stringInProcess pi sym =
          stringFrom_ (map (\o -> fetchBytes pid (addr + fromIntegral (8*o))) [0..]))
      return ret
 
-tagListInProcess :: Int -> E.ElfSymbolTableEntry -> IO ([(String, String)])
-tagListInProcess = undefined
