@@ -16,13 +16,13 @@ cfgTarget (RunConfig _ mt) = mt
 --
 -- And, the static configuration data
 defaultTarget = Target64
-
+{-
 frameSize :: RunConfig -> FrameType -> Int
 frameSize _ FDouble = 8
 frameSize _ FFloat = 4
 frameSize _ FInt = 4
 frameSize _ FTime = 16
-
+-}
 implSize :: RunConfig -> ImplMember -> Int
 implSize c (ImplMember _ t) = memSize c t
       where memSize :: RunConfig -> ImplMemberType -> Int

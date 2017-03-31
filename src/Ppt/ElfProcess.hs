@@ -6,6 +6,7 @@ import Data.Bits (shiftR, (.&.))
 import Data.Char (ord)
 import Foreign.C.Types
 import Control.Concurrent (runInBoundThread)
+import Numeric (showHex)
 import qualified Data.Elf as E
 import qualified Data.List as L
 import qualified System.IO as IO
@@ -16,6 +17,7 @@ import qualified Language.C.Inline.Unsafe as CU
 
 C.include "<stdio.h>"
 C.include "<inttypes.h>"
+C.include "<endian.h>"
 C.include "<sys/ptrace.h>"
 C.include "<sys/types.h>"
 C.include "<sys/wait.h>"
@@ -75,24 +77,25 @@ stringFrom_ (fn:fns) =
        Nothing -> do
          vs <- stringFrom_ fns
          return (bytesOf v [0..7] `BS.append` vs)
-       Just n -> return $ bytesOf v [0..(n-1)]
+       Just n -> do
+         return $ bytesOf v [0..(n-1)]
 
 runInPtrace :: Int -> (CInt -> IO a) -> IO (Maybe a)
 runInPtrace ipid fn =
   let op = do let pid = fromIntegral ipid
-              ptrace_ret <- [CU.exp| int {ptrace(PTRACE_ATTACH, $(int pid), 0, 0)}|]
+              ptrace_ret <- [C.exp| int {ptrace(PTRACE_ATTACH, $(int pid), 0, 0)}|]
               if ptrace_ret /= 0
               then do
-                 [CU.exp| void { perror("PTRACE_ATTACH") }|]
+                 [C.exp| void { perror("PTRACE_ATTACH") }|]
                  putStrLn "Have a look at /etc/sysctl.d/10-ptrace.conf"
                  return Nothing
               else do
-                  [CU.block| void {
+                  [C.block| void {
                      int unused_status;
                      waitpid($(int pid), &unused_status, 0);
                    }|]
                   value <- fn pid
-                  [CU.exp| int {ptrace(PTRACE_DETACH, $(int pid), 0, 0)}|]
+                  [C.exp| int {ptrace(PTRACE_DETACH, $(int pid), 0, 0)}|]
                   return $ Just value
   in runInBoundThread op
 
@@ -100,7 +103,7 @@ integerInProcess :: Int -> E.ElfSymbolTableEntry -> IO (Maybe Int)
 integerInProcess pi sym =
   let addr = fromIntegral $ E.steValue sym
   in runInPtrace pi (\pid -> do
-         value <- [CU.exp| int {ptrace(PTRACE_PEEKDATA, $(int pid), (void *) $(uintptr_t addr), 0)}|]
+         value <- [C.exp| int {ptrace(PTRACE_PEEKDATA, $(int pid), (void *) $(uintptr_t addr), 0)}|]
          return $ fromIntegral value)
 
 setIntegerInProcess :: Int -> E.ElfSymbolTableEntry  -> Int -> IO (Bool)
@@ -108,7 +111,7 @@ setIntegerInProcess pi sym value =
   do let addr = fromIntegral $ E.steValue sym
          rawVal = fromIntegral value
      ret <- runInPtrace pi (\pid -> do
-         value <- [CU.exp| int {ptrace(PTRACE_POKEDATA, $(int pid), (void *) $(uintptr_t addr), $(int rawVal))}|]
+         value <- [C.exp| int {ptrace(PTRACE_POKEDATA, $(int pid), (void *) $(uintptr_t addr), $(int rawVal))}|]
          return $ fromIntegral value)
      return $ maybe False (\a -> a == 0) ret
 
@@ -118,9 +121,8 @@ swapIntegerInProcess pi sym oldValue newValue =
          rawVal = fromIntegral newValue
          coldValue = fromIntegral oldValue
      ret <- runInPtrace pi (\pid -> do
-         value <- [CU.block| int {
-                      int result = ptrace(PTRACE_POKEDATA, $(int pid), (void *) $(uintptr_t addr),
-                                           $(int rawVal));
+         value <- [C.block| int {
+                      int result = ptrace(PTRACE_PEEKDATA, $(int pid), (void *) $(uintptr_t addr), 0);
                       if (result == $(int coldValue)) {
                            ptrace(PTRACE_POKEDATA, $(int pid), (void *) $(uintptr_t addr), $(int rawVal));
                            return $(int rawVal);
@@ -137,8 +139,13 @@ stringInProcess pi sym =
          addr = fromIntegral $ E.steValue sym
          fetchBytes :: CInt -> CUIntPtr -> IO (CULong)
          fetchBytes pid off = do
-           [CU.exp| unsigned long {ptrace(PTRACE_POKEDATA, $(int pid), (void *) $(uintptr_t off), 0)}|]
+           [C.block| unsigned long {
+               return be64toh(ptrace(PTRACE_PEEKDATA, $(int pid), (void *) $(uintptr_t off), 0));
+               } |]
      ret <- runInPtrace pi (\pid -> do
-         stringFrom_ (map (\o -> fetchBytes pid (addr + fromIntegral (8*o))) [0..]))
+         ptr <- [C.exp| unsigned long { ptrace(PTRACE_PEEKDATA, $(int pid), (void *) $(uintptr_t addr), 0)} |]
+         res <- stringFrom_ (map (\o -> fetchBytes pid ((fromIntegral ptr) + fromIntegral (8*o))) [0..])
+         return res)
+
      return ret
 

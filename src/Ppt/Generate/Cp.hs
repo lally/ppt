@@ -259,6 +259,14 @@ controlDecl cfg =
                                   , ("struct perf_event_attr", "counterdata[3]")
                                   , (uint64_t, "client_flags") ]
 
+dataDecl :: OutputCfg -> String -> PP.Doc
+dataDecl cfg first =
+  let x = x
+  in structDecl cfg ("data_" ++ bufName cfg) [ ("static " ++ first ++ " *", "ppt_buf"),
+                                               ("static int", "ppt_bufsz")]
+
+
+
 -- |Wraps a 'body' in a namespace decl and #includes.  The 'headers' list elements must already
 -- have either angle brackets or quotes around them.
 fileWrap :: OutputCfg -> [String] -> [PP.Doc] -> PP.Doc
@@ -274,7 +282,7 @@ fileWrap cfg headers body =
               (mconcat $ take (length namespaces) $ repeat nsBack) <+> (
               (PP.text "// namespace ") <> nsName)
             blank = [PP.empty]
-        in PP.sep (headerBlock ++ blank ++ nsPrefix ++ blank ++ body ++ blank ++ [nsSuffix])
+        in PP.sep (headerBlock ++ blank ++ nsPrefix ++ blank ++ body ++ blank ++ [nsSuffix, PP.empty])
 
 classDecl :: String -> [MemberData] -> Decl
 classDecl n [] = ClassDecl n Nothing [] [] [] []
@@ -359,8 +367,10 @@ allModules decls =
 
 saveFn :: String -> OutputCfg -> Maybe Int -> PP.Doc
 saveFn firstName cfg typeIdx =
-    blockdecl cfg (docConcat ["void save()"])  PP.empty [
-       blockdecl cfg (docConcat [ "if (_ppt_buf || (_ppt_hmem_",
+  let bufp = "data_" ++ (bufName cfg) ++ "::ppt_buf"
+      bufsz = "data_" ++ (bufName cfg) ++ "::ppt_bufsz"
+  in blockdecl cfg (docConcat ["void save()"])  PP.empty [
+       blockdecl cfg (docConcat [ "if (", bufp, " || (_ppt_hmem_",
                                   (bufName cfg)," && try_attach()))"]) PP.semi $ concat [
            [ "int index = nextIndex()",
              "__ppt_seqno = index",
@@ -368,18 +378,18 @@ saveFn firstName cfg typeIdx =
            (case typeIdx of
               Nothing -> []
               Just idx -> [PP.text $ "__ppt_type = " ++ show idx]) ++
-           [ PP.text "int modidx = index % _ppt_bufsz" ],
+           [ PP.text $ "int modidx = index % " ++ bufsz],
            (if multithreadWrite cfg
-            then [PP.text "_ppt_buf[modidx].__ppt_seqno = 0",
-                  PP.text "_ppt_buf[modidx].__ppt_seqno_back = 0",
+            then [PP.text $ bufp ++ "[modidx].__ppt_seqno = 0",
+                  PP.text $ bufp ++ "[modidx].__ppt_seqno_back = 0",
                   writeBarrier]
             else []),
-           [ PP.text "_ppt_buf[modidx].__ppt_seqno = modidx",
+           [ PP.text $ bufp ++ "[modidx].__ppt_seqno = modidx",
              writeBarrier,
-             PP.text ("memcpy(&_ppt_buf[modidx], this + sizeof(__ppt_seqno), " ++
+             PP.text ("memcpy(&" ++ bufp ++ "[modidx], this + sizeof(__ppt_seqno), " ++
                        "sizeof(*this) - 2*sizeof(__ppt_seqno))"),
              writeBarrier,
-             PP.text "_ppt_buf[modidx].__ppt_seqno_back = modidx",
+             PP.text $ bufp ++ "[modidx].__ppt_seqno_back = modidx",
              writeBarrier
            ]
        ],
@@ -394,8 +404,7 @@ modDecls cfg firstName mods =
                       GMSaveBuffer (LayoutIO sz off) mt ->
                         PP.vcat $ [ docConcat ["class ", firstName, ";"],
                                     externDecl "int" ["_ppt_hmem", bufName cfg],
-                                    staticDecl firstName ["*_ppt_buf"],
-                                    staticDecl "int" ["_ppt_bufsz"],
+                                    dataDecl cfg firstName,
                                     PP.text "bool try_attach();",
                                     docConcat ["class ", firstName, ";"],
                                     docConcatSp ["int", "nextIndex();"]]
@@ -408,8 +417,10 @@ modInlineDefs cfg firstName mods = PP.empty
 
 attachFn :: String -> OutputCfg -> Bool -> PP.Doc
 attachFn firstName cfg hasCounters =
-    blockdecl cfg (PP.text "bool try_attach()") PP.empty [
-        blockdecl cfg (docConcat ["if (_ppt_hmem_",buf," && !_ppt_buf)"]) PP.empty ([
+  let bufp = "data_" ++ (bufName cfg) ++ "::ppt_buf"
+      bufsz = "data_" ++ (bufName cfg) ++ "::ppt_bufsz"
+  in blockdecl cfg (PP.text "bool try_attach()") PP.empty [
+        blockdecl cfg (docConcat ["if (_ppt_hmem_",buf," && !",bufp,")"]) PP.empty ([
             stmt "struct shmid_ds ds",
             blockdecl cfg (docConcat [
                               "if (shmctl(_ppt_hmem_",buf,", IPC_STAT, &ds) != 0)"]) PP.semi [
@@ -426,10 +437,11 @@ attachFn firstName cfg hasCounters =
                 docConcat ["_ppt_hmem_",buf," = 0"],
                 PP.text "return false"
                 ],
-            docConcat ["_ppt_buf = reinterpret_cast<", firstName, "*>(reinterpret_cast<uint8_t*>(_ppt_ctrl) + elem_offset);"],
-            stmt "_ppt_ctrl->data_block = _ppt_buf",
+            docConcat [bufp, " = reinterpret_cast<", firstName, "*>(reinterpret_cast<uint8_t*>(_ppt_ctrl) + elem_offset);"],
+            stmt $ "_ppt_ctrl->data_block = " ++ bufp,
             docConcat ["_ppt_ctrl->data_block_sz = (ds.shm_segsz - elem_offset) / sizeof(",
                        firstName,")" ] <> PP.semi,
+            docConcat [bufsz, " = _ppt_ctrl->data_block_sz" ] <> PP.semi,
             docConcat ["_ppt_ctrl->data_block_hmem_attached = _ppt_hmem_",
                        buf ] <> PP.semi]
             ++ (if hasCounters
@@ -437,11 +449,11 @@ attachFn firstName cfg hasCounters =
                 else []) ++
             [stmt "return true"
             ]),
-        blockdecl cfg (docConcat ["else if (_ppt_buf && !_ppt_hmem_",buf,")"]) PP.empty ([
-            blockdecl cfg (PP.text "if (shmdt(_ppt_buf) != 0)") PP.semi [
+        blockdecl cfg (docConcat ["else if (",bufp," && !_ppt_hmem_",buf,")"]) PP.empty ([
+            blockdecl cfg (PP.text $ "if (shmdt(_ppt_ctrl) != 0)") PP.semi [
                 docConcat ["perror(\"failed ppt detach of ",buf,": shmdt\")"]
                 ],
-            stmt "_ppt_buf = nullptr",
+            stmt $ bufp ++ " = nullptr",
             docConcat ["_ppt_hmem_", buf, " = 0"] <> PP.semi]
             ++ (if hasCounters
                 then [stmt "closeCounters()"]
@@ -468,6 +480,8 @@ moduleSource firstName cfg hasCounters (GMSaveBuffer (LayoutIO sz off) mt) =
           docConcat ["ppt_stat_t _ppt_stat_", bufName cfg, attrused] <> PP.semi]
   in PP.sep ([
     externDecl "const char*" ["_ppt_json", bufName cfg],
+    stmt $  firstName  ++ " * data_" ++ (bufName cfg) ++ "::ppt_buf",
+    stmt $  "int data_" ++ (bufName cfg) ++ "::ppt_bufsz",
     PP.hsep [docConcat ["const char* _ppt_json_", bufName cfg],
              PP.text attrused, PP.text "=", PP.text (enquote $ makeJSON cfg)] <> PP.semi,
     docConcat ["int _ppt_hmem_", bufName cfg, " ", attrused, ";"]]

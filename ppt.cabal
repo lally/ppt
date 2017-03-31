@@ -52,6 +52,7 @@ library
                      , elf
                      , inline-c
                      , unordered-containers
+                     , vector
   default-extensions:  UnicodeSyntax
                      , OverloadedStrings
   default-language:    Haskell2010

@@ -2,11 +2,16 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module Ppt.Agent(attach) where
+import Control.Concurrent
 import Control.Monad.Trans.Either
+import Control.Exception (handle, displayException)
 import Data.Aeson
 import Data.Char
 import Data.Maybe
+import Data.Word
 import Foreign.C.Error
+import Foreign.Ptr
+import GHC.Exception
 import Numeric
 import Ppt.Configuration
 import Ppt.ElfProcess
@@ -20,14 +25,22 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Elf as E
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
+import qualified Data.Vector.Storable as V
+import qualified Data.Vector.Storable.Mutable as VM
 import qualified Language.C.Inline as C
 import qualified Language.C.Inline.Unsafe as CU
 import qualified System.Console.GetOpt as GO
 import qualified System.Posix.Process as POS
+import           Data.Monoid ((<>))
+
+C.context (C.baseCtx <> C.vecCtx)
 
 C.include "ppt-control.h"
 C.include "<sys/ipc.h>"
 C.include "<sys/shm.h>"
+C.include "<string.h>"
+C.include "<stdio.h>"
+C.include "<inttypes.h>"
 
 {-
     Command line processing support
@@ -38,23 +51,22 @@ data Flag = Pid Int
 arglist :: [GO.OptDescr Flag]
 arglist = [GO.Option ['p'] ["pid"] (GO.ReqArg (\t -> Pid (read t)) "pid") "Pid to attach to."]
 
+mlast :: [a] -> Maybe a
+mlast [] = Nothing
+mlast [x] = Just x
+mlast (a:as) = mlast as
+
 -- Determine the single-member element size of the shared memory segment.
-sharedMemSz :: JsonRep -> Maybe Int
-sharedMemSz json =
-  let last :: [a] -> Maybe a
-      last [] = Nothing
-      last [x] = Just x
-      last (a:as) = last as
-      emit = jsBufferEmit json
+frameSize :: JsonRep -> Maybe Int
+frameSize json =
+  let emit = jsBufferEmit json
       frames = jsBufferFrames json
-      size = do
-        aFrame <- last frames
-        lastMem <- last $ flLayout aFrame
+  in do aFrame <- mlast frames
+        lastMem <- mlast $ flLayout aFrame
         return (lOffset lastMem + lSize lastMem)
-  in size
 
 roundUp :: Int -> Int -> Int
-roundUp elemSz blockSz =
+roundUp blockSz elemSz =
   let min = blockSz `div` elemSz
       additional = if (blockSz `mod` elemSz) > 0
         then 1
@@ -78,19 +90,127 @@ checkErrors ((Just s):ss) = die s
 checkErrors (Nothing:ss) = checkErrors ss
 checkErrors [] = return ()
 
-numElementsInBuffer = 16384
+numElementsInBuffer = 128
+hmem_pfx = "_ppt_hmem_"
+stat_pfx = "_ppt_stat_"
+json_pfx = "_ppt_json_"
+
+
+-- Params: (1) address of first element in shared memory array
+--         (2) element to start at
+--         (3) starting sequence number
+--         (3) Number of elements in that array
+--         (4) Size (in 4-byte words) of that each element
+--         (5) Destination Vector.  Mutable.  Must be at least as big as shared memory block.
+-- Returns (number copied, last index consumed, last_seqno)
+readBuffer :: Ptr Int -> Int -> Word32 -> Int -> Int -> VM.IOVector C.CInt -> IO (Int, Int, Word32)
+readBuffer src start seqno bufelems elem_sz_in_words destvector =
+  do  args <- VM.new 2
+      let c_elem_sz_in_words = fromIntegral elem_sz_in_words
+          c_bufelems = fromIntegral bufelems
+          c_start = fromIntegral start
+          c_seqno = fromIntegral seqno
+          c_src = castPtr src
+      cnt <- [C.block| int {
+                   const int elem_sz = $(int c_elem_sz_in_words);
+                   const int nr_elems = $(int c_bufelems);
+                   const uint32_t* start = $(int* c_src);
+                   const uint32_t *end = &start[elem_sz * nr_elems];
+                   const uint32_t *cur = &start[elem_sz * $(int c_start)];
+                   const uint32_t shm_sz = (end - start) / elem_sz;
+                   const uint32_t start_seqno = $(uint32_t c_seqno);
+                   uint32_t seq_floor;
+                   int *dest = $vec-ptr:(int* destvector);
+                   uint32_t last_cur_seqno = start_seqno, stride = 0;
+                   printf("last_cur_seqno set to %u, first seqno is %u\n", last_cur_seqno, *cur);
+                   printf("start address: 0x%8p, cursor (%4d) address: %8p\n",
+                          start, $(int c_start), cur);
+                   for (const uint32_t *s = start; s != end; s += elem_sz) {
+                      if (s == cur)
+                         printf("%6d<\t", *s);
+                      else
+                         printf("%7d\t", *s);
+                   }
+                   printf("\n");
+                   uint32_t count = 0;
+
+                   if (nr_elems >= start_seqno) {
+                     seq_floor = 1;
+                   } else {
+                     seq_floor = start_seqno - nr_elems;
+                   }
+                   while (*cur && count < nr_elems &&
+                          (*cur > last_cur_seqno
+                           || (*cur <= seq_floor)
+                           || (count == 0 && *cur != last_cur_seqno))) {
+                     last_cur_seqno = *cur;
+                     stride++;
+                     count++;
+                     cur += elem_sz;
+                     if (nr_elems >= start_seqno) {
+                       seq_floor = 1;
+                     } else {
+                       seq_floor = start_seqno - nr_elems;
+                     }
+                     if (cur == end) {
+                        memcpy(dest, cur - (stride * elem_sz), stride * elem_sz);
+                        printf("[mid] saved %u items\n", stride);
+                        dest += stride * elem_sz;
+                        cur = start;
+                        stride = 0;
+                     }
+                   }
+                   memcpy(dest, cur - (stride * elem_sz), stride * elem_sz);
+                   printf("[end] saved %u items\n", stride);
+                   $vec-ptr:(int * args)[0] = last_cur_seqno;
+                   $vec-ptr:(int * args)[1] = (cur - start) / elem_sz;
+                   printf("[end] last_cur_seqno = %d.  cursor=%ld\n", last_cur_seqno, (cur - start) / elem_sz);
+                   return count;
+                   } |]
+      last_seqno <- VM.read args 0
+      end <- VM.read args 1
+      return (fromIntegral cnt, fromIntegral end, fromIntegral last_seqno)
+
+processBufferValues :: IntPtr -> JsonRep -> Int -> IO ()
+processBufferValues shmPtr json bufElems = do
+  let (Just elemSize) = frameSize json
+      elemSizeInWords = elemSize `div` 4
+      destIntPtr = ((roundUp 392 elemSize) + fromIntegral shmPtr)
+      destP = intPtrToPtr $ fromIntegral destIntPtr
+      execLoop cursor seqno saveBuffer = do
+            (count, cursor', seqno') <- readBuffer destP cursor seqno bufElems elemSizeInWords saveBuffer
+            putStrLn $ ">> Count: " ++ show count ++ ", Cursor: " ++ show cursor' ++ ", seqno: " ++ show seqno'
+            putStrLn $ ">> shmPtr: " ++ (showHex shmPtr ", destIntPtr: ") ++ (showHex  destIntPtr "")
+            putStrLn $ ">> that's an offset of " ++ show (destIntPtr - fromIntegral shmPtr)
+            putStrLn $ ">> Size of an object: " ++ (show elemSize) ++ ", " ++ (show elemSizeInWords) ++ " words."
+            -- TODO: print out destination buffer.  Make sure it's resaonable compared to input.
+            -- TODO: make this dynamic timing based on count vs bufsize.
+            threadDelay 250000
+            execLoop cursor' seqno' saveBuffer
+  destBuffer <- VM.new (bufElems * elemSizeInWords)
+  execLoop 0 1 destBuffer
+  return ()
+
+getBuffers :: Int -> E.Elf -> [E.ElfSymbolTableEntry]
+getBuffers pid process = symbolsWithPrefix process hmem_pfx
 
 attach :: [String] -> RunConfig -> IO ()
 attach [] _ = do
-  putStrLn "usage: ppt attach <pid>"
+  putStrLn "usage: ppt attach <pid> buffer"
+
+attach (a:[]) cfg = do
+  let pid = read a :: Int
+  process <- loadProcess pid
+  let pfx_syms = getBuffers pid process
+      hmem_syms = map BSC.unpack $ mapMaybe (snd . E.steName) $ pfx_syms
+      buffers = map (drop (L.length hmem_pfx)) hmem_syms
+  putStrLn $ "Buffers in process: " ++ L.intercalate ", " buffers
 
 attach (a:as) cfg = do
   let pid = read a :: Int
+      ctrlStructSz = [C.pure| int{ sizeof(struct ppt_control) } |]
   process <- loadProcess pid
-  let hmem_pfx = "_ppt_hmem_"
-      stat_pfx = "_ppt_stat_"
-      json_pfx = "_ppt_json_"
-      pfx_syms = symbolsWithPrefix process hmem_pfx
+  let pfx_syms = getBuffers pid process
       hmem_syms = map BSC.unpack $ mapMaybe (snd . E.steName) $ pfx_syms
       buffers = map (drop (L.length hmem_pfx)) hmem_syms
       bufs = HM.fromList $ mapMaybe (\s -> (,) <$> (fmap BSC.unpack $ snd (E.steName s)) <*> (pure s)) pfx_syms
@@ -111,48 +231,70 @@ attach (a:as) cfg = do
   ourPid <- POS.getProcessID
   moldPid <- swapIntegerInProcess pid statSym 0 (fromIntegral ourPid)
   mabiStr <- stringInProcess pid jsonSym
-
   let (Just oldPid) = moldPid
       (Just abiStr) = mabiStr
       jsonVal = (decode $ BSL.fromStrict abiStr) :: Maybe JsonRep
       (Just json) = jsonVal
-      melemSize = sharedMemSz json
+      melemSize = frameSize json
       (Just elemSize) = melemSize
-      ctrlStructSz = [C.pure| int{ sizeof(struct ppt_control) } |]
-      controlSize = roundUp  392 elemSize
+      controlSize = roundUp 392 elemSize
       totalBufferSize = fromIntegral $ controlSize + elemSize * numElementsInBuffer
   checkErrors [
+    check ("Failed to interpret frame size") $ isJust melemSize,
     check ("Failed to read symbol in pid " ++ show pid) $ isJust moldPid,
     check ("Process appears busy with ppt pid " ++ show oldPid) $ oldPid /= 0,
     check ("Failed to read buffer metadata from " ++ show pid) $ isJust mabiStr,
-    check ("Failed to decode JSON metadata") $ isJust jsonVal
+    check ("Failed to decode JSON metadata: " ++ show abiStr) $ isJust jsonVal
     ]
   -- Ok, we have the lock in this process nad the JSON read.  Now create the shared mem block
   -- and try to attach it.
   shmId <- throwErrnoIfMinus1 "Failed to allocate shared memory" (
-    [C.exp| int {shmget(IPC_PRIVATE, $(size_t totalBufferSize), IPC_CREAT | IPC_EXCL)} |])
-  -- TODO: put this all in a handle block that nukes the shared mem segment
-  shmAddr <- throwErrnoIfMinus1 "Failed to attach shared memory block" (
-    [C.exp| uintptr_t {(uintptr_t) shmat($(int shmId), NULL, 0)} |])
-  [C.block| void {
-    struct ppt_control *pc = (struct ppt_control*) $(uintptr_t shmAddr);
-    pc->control_blk_sz = sizeof(struct ppt_control);
-    pc->data_block_hmem = 0;
-    pc->nr_perf_ctrs = 0;
-    pc->client_flags = 0; } |]
-  moldHandle <- swapIntegerInProcess pid hmem_sym 0 (fromIntegral shmId)
-  checkErrors [
-    let (Just oldHandle) = moldHandle in check ("Got back old memory handle " ++ show oldHandle) $ (fromIntegral oldHandle) == shmId
-    ]
-  putStrLn "Shared memory attached."
+    [C.exp| int {shmget(IPC_PRIVATE, $(size_t totalBufferSize), IPC_CREAT | IPC_EXCL | 0600)} |])
+  putStrLn $ "Got shared memory handle " ++ show shmId
+  let cleanup pid shmId = do
+          moldHandle <- swapIntegerInProcess pid hmem_sym (fromIntegral shmId) 0
+          checkErrors [
+            check "Failed to clear shared memory handle" (isJust moldHandle),
+            let (Just oldHandle) = moldHandle
+            in check ("Got back old memory handle " ++ show oldHandle) $ (fromIntegral oldHandle) == 0
+            ]
+          throwErrnoIfMinus1_ ("Failed to delete shared memory segment " ++ show shmId) (
+              [C.exp| int {shmctl( $(int shmId), IPC_RMID, NULL)} |])
+          swapIntegerInProcess pid statSym (fromIntegral ourPid) 0
+          return ()
 
-  if ((L.length as) > 0) && (isJust $ (HM.lookup (hmem_pfx ++ head as) bufs))
-  then
-   do let bufname = head as
-      putStrLn ("FAKE: attaching to buffer " ++ bufname)
-      return ()
-  else
-   do putStrLn $ "Buffers: " ++ (L.intercalate "," buffers) ++ ".  Use ppt attach <pid> <buffer> to attach to that buffer."
+      reportError :: String -> IO (C.CInt) -> IO ()
+      reportError err fn = do
+         res <- fn
+         if (fromIntegral res) == -1
+         then do --errno <- getErrno
+                 putStrLn $ err -- ++ ": " ++ show errno
+         else return ()
+      errHandler :: IOError -> IO ()
+      errHandler ex = do putStrLn ("ERROR: " ++ displayException ex)
+                         cleanup pid shmId
+  handle errHandler $ do
+    shmAddr <- throwErrnoIfMinus1 "Failed to attach shared memory block" (
+      [C.exp| uintptr_t {(uintptr_t) shmat($(int shmId), NULL, 0)} |])
+    [C.block| void {
+      struct ppt_control *pc = (struct ppt_control*) $(uintptr_t shmAddr);
+      pc->control_blk_sz = sizeof(struct ppt_control);
+      pc->data_block_hmem = 0;
+      pc->nr_perf_ctrs = 0;
+      pc->client_flags = 0; } |]
+    moldHandle <- swapIntegerInProcess pid hmem_sym 0 (fromIntegral shmId)
+    checkErrors [
+      check "Failed to set shared memory handle" (isJust moldHandle),
+      let (Just oldHandle) = moldHandle
+      in check ("Got back old memory handle " ++ show oldHandle) $ (fromIntegral oldHandle) == shmId
+      ]
+    putStrLn "Shared memory attached."
+    -- TODO: FIX THIS
+    processBufferValues (fromIntegral shmAddr) json numElementsInBuffer
+    cleanup pid shmId
 
+
+
+  putStrLn "Done."
 
 
