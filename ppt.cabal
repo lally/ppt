@@ -17,6 +17,8 @@ library
   hs-source-dirs:      src
   exposed-modules:     Ppt
                        , Ppt.Agent
+                       , Ppt.Agent.Command
+                       , Ppt.Agent.ElfProtocol
                        , Ppt.Configuration
                        , Ppt.Generate
                        , Ppt.StaticInstrumentation
@@ -49,15 +51,19 @@ library
                      , aeson
                      , either
                      , lens
+                     , lens-tutorial
+                     , mtl
                      , elf
                      , inline-c
                      , unordered-containers
                      , vector
+                     , time
+                     , bytestring-conversion
   default-extensions:  UnicodeSyntax
                      , OverloadedStrings
   default-language:    Haskell2010
   c-sources:           src/Ppt/ElfProcess.c
-                     , src/Ppt/Agent.c
+                     , src/Ppt/Agent/ElfProtocol.c
 
 executable ppt
   hs-source-dirs:      tools

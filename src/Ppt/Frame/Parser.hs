@@ -1,23 +1,23 @@
 {-# LANGUAGE TemplateHaskell #-}
-module Ppt.Frame.Parser where -- (parseFile, compileFrame) where 
+module Ppt.Frame.Parser where -- (parseFile, compileFrame) where
 
-import Ppt.Frame.ParsedRep
-import Control.Exception (handle)
-import Control.Lens hiding (element, noneOf)
+import Control.Exception                      (handle)
+import Control.Lens                           hiding (element, noneOf)
 import Control.Monad
 import Control.Monad.Trans.Either
-import Data.Aeson (encode, decode)
-import Data.ByteString.Lazy.Char8 (pack, unpack)
+import Data.Aeson                             (decode, encode)
+import Data.ByteString.Lazy.Char8             (pack, unpack)
 import Data.List
-import Data.Maybe (catMaybes, mapMaybe)
-import Text.ParserCombinators.Parsec (sepBy1, try, char, eof, many1, alphaNum,
-                                      many, ParseError, digit, noneOf,
-                                      string, (<|>), (<?>), GenParser)
+import Data.Maybe                             (catMaybes, mapMaybe)
+import Ppt.Frame.ParsedRep
+import Text.ParserCombinators.Parsec          (GenParser, ParseError, alphaNum, char, digit, eof, many, many1,
+                                               noneOf, sepBy1, string, try, (<?>), (<|>))
 import Text.ParserCombinators.Parsec.Language (javaStyle)
-import Text.ParserCombinators.Parsec.Prim (parse)
-import qualified Data.HashMap.Strict as HM
-import qualified Control.Lens.Fold as CLF
-import qualified Text.ParserCombinators.Parsec.Token as P
+import Text.ParserCombinators.Parsec.Prim     (parse)
+
+import qualified Control.Lens.Fold                      as CLF
+import qualified Data.HashMap.Strict                    as HM
+import qualified Text.ParserCombinators.Parsec.Token    as P
 
 lexer :: P.TokenParser ()
 lexer = P.makeTokenParser
@@ -252,7 +252,7 @@ optionUpdate base opts =
 
 --    let untag (Tag k v) = (k, v)
 --        orig = HM.fromList $ map untag (view outl bs)
---        new = HM.fromList $ map untag $ concatMap 
+--        new = HM.fromList $ map untag $ concatMap
 --    in HM.union  new orig
       langs = catMaybes $ map (preview lang) opts
       lang_ = replace lang eLanguage opts base

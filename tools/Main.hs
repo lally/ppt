@@ -29,7 +29,7 @@ runCommand args cfg = do
     case head args of
       "gen" -> Gen.generate (tail args) cfg
       "generate" -> Gen.generateCommand (tail args)
-      "attach" -> Agent.attach (tail args) cfg
+      "attach" -> Agent.attach (tail args)
       "?" -> showHelp
       "help" -> showHelp
       "ret" -> Gen.checkout (tail args) cfg

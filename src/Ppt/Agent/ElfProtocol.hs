@@ -1,11 +1,7 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Ppt.Agent(attach) where
-import Ppt.Agent.Command
-
-{-
-
+module Ppt.Agent.ElfProtocol where
 import Control.Concurrent
 import Control.Monad.Trans.Either
 import Control.Exception (handle, displayException)
@@ -36,6 +32,7 @@ import qualified Language.C.Inline.Unsafe as CU
 import qualified System.Console.GetOpt as GO
 import qualified System.Posix.Process as POS
 import           Data.Monoid ((<>))
+
 C.context (C.baseCtx <> C.vecCtx)
 
 C.include "ppt-control.h"
@@ -255,4 +252,3 @@ attachAndRun pid bufferName runFn = do
     cleanup pid shmId
   putStrLn "Done."
 
--}
