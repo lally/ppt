@@ -378,18 +378,22 @@ saveFn firstName cfg typeIdx =
            (case typeIdx of
               Nothing -> []
               Just idx -> [PP.text $ "__ppt_type = " ++ show idx]) ++
-           [ PP.text $ "int modidx = index % " ++ bufsz],
+           [ PP.text $ "const int modidx = (index-1) % " ++ bufsz],
            (if multithreadWrite cfg
             then [PP.text $ bufp ++ "[modidx].__ppt_seqno = 0",
                   PP.text $ bufp ++ "[modidx].__ppt_seqno_back = 0",
                   writeBarrier]
             else []),
-           [ PP.text $ bufp ++ "[modidx].__ppt_seqno = modidx",
+           [ PP.text $ bufp ++ "[modidx].__ppt_seqno = index",
              writeBarrier,
-             PP.text ("memcpy(&" ++ bufp ++ "[modidx], this + sizeof(__ppt_seqno), " ++
-                       "sizeof(*this) - 2*sizeof(__ppt_seqno))"),
+             docConcat ["memcpy(((uint8_t*)&", bufp, "[modidx]) + sizeof(__ppt_seqno),",
+                        "((uint8_t*)this) + sizeof(__ppt_seqno),",
+                         "sizeof(*this) - 2*sizeof(__ppt_seqno))"],
+
+--             PP.text ("memcpy(&" ++ bufp ++ "[modidx], this + sizeof(__ppt_seqno), " ++
+--                       "sizeof(*this) - 2*sizeof(__ppt_seqno))"),
              writeBarrier,
-             PP.text $ bufp ++ "[modidx].__ppt_seqno_back = modidx",
+             PP.text $ bufp ++ "[modidx].__ppt_seqno_back = index",
              writeBarrier
            ]
        ],
