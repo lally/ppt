@@ -8,6 +8,8 @@
 module Ppt.Agent.Command where
 import Ppt.Agent.ElfProtocol
 import Control.Lens                 hiding (element, noneOf, sizeOf)
+import Control.Exception (handle, displayException)
+import Control.Exception.Base
 import Control.Monad.State
 import Control.Concurrent
 import Control.Applicative
@@ -177,26 +179,34 @@ processBufferValues desc timeOffset fileName shmPtr json bufElems = do
       destIntPtr = ((roundUp 392 elemSize) + fromIntegral shmPtr)
       destP = intPtrToPtr $ fromIntegral destIntPtr
       execLoop file cursor seqno saveBuffer = do
-            (count, cursor', seqno') <- readBuffer destP cursor seqno bufElems elemSizeInWords saveBuffer
-            putStrLn $ ">> Count: " ++ show count ++ ", Cursor: " ++ show cursor' ++ ", seqno: " ++ show seqno'
+            (count', cursor', seqno') <- readBuffer destP cursor seqno bufElems elemSizeInWords saveBuffer
+            putStrLn $ ">> (Raw) Count: " ++ show count' ++ ", Cursor: " ++ show cursor' ++ ", seqno: " ++ show seqno'
             putStrLn $ ">> bufElems: " ++ show bufElems
             putStrLn $ ">> shmPtr: " ++ (showHex shmPtr ", destIntPtr: ") ++ (showHex  destIntPtr "")
             putStrLn $ ">> that's an offset of " ++ show (destIntPtr - fromIntegral shmPtr)
             putStrLn $ ">> Size of an object: " ++ (show elemSize) ++ ", " ++ (show elemSizeInWords) ++ " words."
-            if ((cursor + count) < bufElems)
-              then writeBufferToFile file saveBuffer cursor count
-              else do
-                let endPart = bufElems - cursor
-                    firstPart = count - endPart
-                writeBufferToFile file saveBuffer cursor endPart
-                writeBufferToFile file saveBuffer 0 firstPart
+            let count = min bufElems (max count' 0)
+            if (count > 0)
+            then if ((cursor + count) < bufElems)
+                  then writeBufferToFile file saveBuffer cursor count
+                  else do
+                    -- wraps around the end of the buffer.
+                    let endPart = bufElems - cursor
+                        firstPart = count - endPart
+                    writeBufferToFile file saveBuffer cursor endPart
+                    writeBufferToFile file saveBuffer 0 firstPart
+            else return ()
             -- TODO: make this dynamic timing based on count vs bufsize.
             hFlush file -- TODO: only do this occasionally.
             threadDelay 250000
             execLoop file cursor' seqno' saveBuffer
+      flushHandler :: Handle -> AsyncException -> IO ()
+      flushHandler file UserInterrupt = hClose file
+      flushHandler _ ex = do self <- myThreadId
+                             throwTo self ex
   file <- saveFile fileName (FileRecord "1.0.0" "now" desc (round $ timeOffset * 3600.0) json)
   destBuffer <- VM.new (bufElems * elemSizeInWords)
-  execLoop file 0 1 destBuffer
+  handle (flushHandler file) $ execLoop file 0 1 destBuffer
   return ()
 
 

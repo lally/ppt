@@ -370,8 +370,8 @@ saveFn firstName cfg typeIdx =
   let bufp = "data_" ++ (bufName cfg) ++ "::ppt_buf"
       bufsz = "data_" ++ (bufName cfg) ++ "::ppt_bufsz"
   in blockdecl cfg (docConcat ["void save()"])  PP.empty [
-       blockdecl cfg (docConcat [ "if (", bufp, " || (_ppt_hmem_",
-                                  (bufName cfg)," && try_attach()))"]) PP.semi $ concat [
+       blockdecl cfg (docConcat [ "if (!", bufp, " && !_ppt_hmem_", bufName cfg, ")" ]) PP.semi [PP.text "return"],
+       blockdecl cfg (docConcat [ "if (try_attach())"]) PP.semi $ concat [
            [ "int index = nextIndex()",
              "__ppt_seqno = index",
              "__ppt_seqno_back = index" ] ++
@@ -386,12 +386,9 @@ saveFn firstName cfg typeIdx =
             else []),
            [ PP.text $ bufp ++ "[modidx].__ppt_seqno = index",
              writeBarrier,
-             docConcat ["memcpy(((uint8_t*)&", bufp, "[modidx]) + sizeof(__ppt_seqno),",
-                        "((uint8_t*)this) + sizeof(__ppt_seqno),",
+             docConcat ["memcpy(((uint8_t*)&", bufp, "[modidx]) + sizeof(__ppt_seqno), ",
+                        "((uint8_t*)this) + sizeof(__ppt_seqno), ",
                          "sizeof(*this) - 2*sizeof(__ppt_seqno))"],
-
---             PP.text ("memcpy(&" ++ bufp ++ "[modidx], this + sizeof(__ppt_seqno), " ++
---                       "sizeof(*this) - 2*sizeof(__ppt_seqno))"),
              writeBarrier,
              PP.text $ bufp ++ "[modidx].__ppt_seqno_back = index",
              writeBarrier
@@ -403,7 +400,6 @@ saveFn firstName cfg typeIdx =
 
 modDecls :: OutputCfg -> String -> [GenModule] -> PP.Doc
 modDecls cfg firstName mods =
---  PP.text $ "/* Insert  decls for runtime here: " ++ (L.intercalate ", " $ map show mods) ++ " */"
   let eachMod mod = case mod of
                       GMSaveBuffer (LayoutIO sz off) mt ->
                         PP.vcat $ [ docConcat ["class ", firstName, ";"],
@@ -424,6 +420,9 @@ attachFn firstName cfg hasCounters =
   let bufp = "data_" ++ (bufName cfg) ++ "::ppt_buf"
       bufsz = "data_" ++ (bufName cfg) ++ "::ppt_bufsz"
   in blockdecl cfg (PP.text "bool try_attach()") PP.empty [
+        blockdecl cfg (docConcat ["if (",bufp," && ", "_ppt_hmem_", bufName cfg, ")"]) PP.semi [
+            PP.text "return true"
+            ],
         blockdecl cfg (docConcat ["if (_ppt_hmem_",buf," && !",bufp,")"]) PP.empty ([
             stmt "struct shmid_ds ds",
             blockdecl cfg (docConcat [

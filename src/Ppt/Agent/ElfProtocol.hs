@@ -5,6 +5,7 @@ module Ppt.Agent.ElfProtocol where
 import Control.Concurrent
 import Control.Monad.Trans.Either
 import Control.Exception (handle, displayException)
+import Control.Exception.Base
 import Data.Aeson
 import Data.Char
 import Data.Maybe
@@ -232,7 +233,11 @@ attachAndRun pid bufferName runFn = do
       errHandler :: IOError -> IO ()
       errHandler ex = do putStrLn ("ERROR: " ++ displayException ex)
                          cleanup pid shmId
-  handle errHandler $ do
+      ctrlcHandler :: AsyncException -> IO ()
+      ctrlcHandler UserInterrupt = cleanup pid shmId
+      ctrlcHandler ex = do putStrLn ("ERROR: " ++ displayException ex)
+                           cleanup pid shmId
+  handle ctrlcHandler $ handle errHandler $ do
     shmAddr <- throwErrnoIfMinus1 "Failed to attach shared memory block" (
       [C.exp| uintptr_t {(uintptr_t) shmat($(int shmId), NULL, 0)} |])
     [C.block| void {
