@@ -47,7 +47,7 @@ data LayoutMember = LMember { lType :: Primitive
                    deriving (Generic, Eq, Show)
 
 data LayoutIOSpec = LayoutIO { lioSize :: Int
-                             , lIOBackOffset :: Int
+                             , lioBackOffset :: Int
                              } deriving (Eq, Show)
 
 data FrameLayout = FLayout { flName :: String

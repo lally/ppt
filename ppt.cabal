@@ -19,6 +19,7 @@ library
                        , Ppt.Agent
                        , Ppt.Agent.Command
                        , Ppt.Agent.ElfProtocol
+                       , Ppt.Decode
                        , Ppt.Configuration
                        , Ppt.Generate
                        , Ppt.StaticInstrumentation
@@ -59,6 +60,7 @@ library
                      , vector
                      , time
                      , bytestring-conversion
+                     , transformers
   default-extensions:  UnicodeSyntax
                      , OverloadedStrings
   default-language:    Haskell2010

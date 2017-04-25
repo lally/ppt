@@ -19,7 +19,7 @@ data Primitive = PDouble | PFloat | PInt | PTime
 -- |Used in evaluation.  Some types are promoted.  PrimType paired with a value.
 data PrimitiveValue = PVRational Double
                     | PVIntegral Int
-                    | PVTime Int
+                    | PVTime Int Int
                     | PVCounter [Int]
                     deriving (Generic, Eq, Show)
 
