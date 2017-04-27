@@ -38,6 +38,7 @@ library
                      , directory
                      , unix
                      , elf
+                     , spool
                      , process
                      , HStringTemplate
                      , MissingH

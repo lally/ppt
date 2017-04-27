@@ -268,6 +268,20 @@ compileFrames target eOpts frs =
                Right r -> Right ((x { flLayout = r }):rs)
   in foldOffsets withBacks
 
+mlast :: [a] -> Maybe a
+mlast [] = Nothing
+mlast [x] = Just x
+mlast (a:as) = mlast as
+
+-- |Determine the single-member element size of the shared memory
+-- segment.  In units of 32-bit words.
+frameSize :: JsonRep -> Maybe Int
+frameSize json =
+  let emit = jsBufferEmit json
+      frames = jsBufferFrames json
+  in do aFrame <- mlast frames
+        lastMem <- mlast $ flLayout aFrame
+        return (lOffset lastMem + lSize lastMem)
 
 -- Then get theem padded to the same size.
 instance ToJSON SeqNoSide

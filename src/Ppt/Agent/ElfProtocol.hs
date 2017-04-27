@@ -43,20 +43,6 @@ C.include "<string.h>"
 C.include "<stdio.h>"
 C.include "<inttypes.h>"
 
-mlast :: [a] -> Maybe a
-mlast [] = Nothing
-mlast [x] = Just x
-mlast (a:as) = mlast as
-
--- Determine the single-member element size of the shared memory segment.
-frameSize :: JsonRep -> Maybe Int
-frameSize json =
-  let emit = jsBufferEmit json
-      frames = jsBufferFrames json
-  in do aFrame <- mlast frames
-        lastMem <- mlast $ flLayout aFrame
-        return (lOffset lastMem + lSize lastMem)
-
 roundUp :: Int -> Int -> Int
 roundUp blockSz elemSz =
   let min = blockSz `div` elemSz

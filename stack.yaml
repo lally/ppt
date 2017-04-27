@@ -13,6 +13,7 @@ extra-deps: [
 , type-level-0.3.0
 , inline-c-0.5.5.9
 , lens-tutorial-1.0.2
+, spool-0.1
 ]
 
 #nix:
