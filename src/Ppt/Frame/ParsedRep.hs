@@ -40,7 +40,8 @@ data ETimeSource = ETimeClockRealtime
 -- |gettimeofday() vs clock_gettime()
 data ETimeRep = ETimeVal | ETimeSpec ETimeSource deriving (Generic, Eq, Show)
 data ERuntime = ERuntime { erMultithread :: Bool } deriving (Generic, Eq, Show)
-data ETag = Tag String String deriving (Generic, Eq, Show) -- ^Key, Value
+data ETag = Tag String String -- ^Key, Value
+            deriving (Generic, Eq, Show) 
 data EBuffer = EBuffer { ebName :: String, ebMinElements :: Maybe Int }
              deriving (Generic, Eq, Show)
 

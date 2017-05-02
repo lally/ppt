@@ -273,8 +273,7 @@ mlast [] = Nothing
 mlast [x] = Just x
 mlast (a:as) = mlast as
 
--- |Determine the single-member element size of the shared memory
--- segment.  In units of 32-bit words.
+-- |Determine the single-member element size of the shared memory segment.  In units of 32-bit words.
 frameSize :: JsonRep -> Maybe Int
 frameSize json =
   let emit = jsBufferEmit json
@@ -306,10 +305,21 @@ instance ToJSON JsonRep where
                     ]
 
 instance FromJSON JsonRep where
-  parseJSON = withObject "_json" $ \o -> do
-    abi <- o .: "abi"
+  parseJSON (Object o) = do -- withObject "_json" $ \o -> do
+    abi <- o .:? "abi" .!= "not found"
     emit <- o .: "emit"
-    frames <- o .: "frames"
+    frames <- o .:? "frames" .!= []
     tags <- o .:? "tags" .!= []
     md <- o .:? "metadata" .!= []
     return $ JsonRep abi emit frames tags md
+
+
+data FileRecord = FileRecord { frFormat    :: String
+                             , frDate      :: String
+                             , frComment   :: String
+                             , frDeltaTime :: Int    -- in seconds
+                             , frJson      :: JsonRep }
+                  deriving (Generic, Eq, Show)
+instance ToJSON FileRecord
+instance FromJSON FileRecord
+

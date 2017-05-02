@@ -133,15 +133,6 @@ parseArgs args = do
                        (tryLens (preview listBuffersDummy) flags >> (ExecBuffers <$> tryLens (preview pid) flags)) <|>
                         (pure ExecShowHelp))
 
-data FileRecord = FileRecord { frFormat    :: String
-                             , frDate      :: String
-                             , frComment   :: String
-                             , frDeltaTime :: Int    -- in seconds
-                             , frJson      :: JsonRep }
-                  deriving (Generic, Eq, Show)
-instance ToJSON FileRecord
-instance FromJSON FileRecord
-
 -- |File Format for output:
 -- 4 bytes Magic Number (0x50505431, 'PPT1')
 -- 4 Byte header length (little endian), named 'k'
