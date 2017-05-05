@@ -20,6 +20,7 @@ import Data.ByteString.Lazy         hiding (readFile, map, head, tail, putStrLn,
 import Data.Int
 import Data.Maybe
 import Data.Time
+import Data.Bits
 import Foreign.Ptr
 import Foreign.Storable
 import GHC.Generics
@@ -152,15 +153,34 @@ saveFile name header = do
   hFlush h
   return h
 
-writeBufferToFile :: Storable a => Handle -> VM.IOVector a -> Int -> Int -> IO ()
+writeBufferToFile :: (Storable a, Show a, Integral a, FiniteBits a) => Handle -> VM.IOVector a -> Int -> Int -> IO ()
 writeBufferToFile h vec startIndex nelements = do
-  VM.unsafeWith vec $ \p -> do
-    -- Don't actually need the data, just a value of 'a' from Ptr a to get its size.
-    first <- peek p
-    let size = sizeOf first
-        start = plusPtr p (startIndex * size)
-    putStrLn $ "calling hPutBuf with p=" ++ (show p) ++ " start=" ++ (show start) ++ "  size=" ++ (show $ size * nelements) ++ " and startIndex=" ++ show startIndex
-    hPutBuf h start (size * nelements)
+  let hexList [] = []
+      hexList xs = (L.concatMap hex thisWord) ++ (' ':(hexList rest))
+        where hex n = (L.take (countLeadingZeros n `div` 4) $ L.repeat '0') ++ (showHex n " ")
+              (thisWord, rest) = L.splitAt 4 xs
+      readFn :: (Storable a, Integral a) => Ptr a-> IO ([a])
+      readFn p = do
+            -- Don't actually need the data, just a value of 'a' from Ptr a to get its size.
+            first <- peek p
+            let size = sizeOf first
+                start = plusPtr p startIndex :: Ptr a
+                end = plusPtr start nelements :: Ptr a
+                toList :: (Integral a, Storable a) => Ptr a -> Ptr a -> Int -> IO ([a])
+                toList s e sz
+                  | s == e = return []
+                  | otherwise = do val <- peek s
+                                   rest <- toList (plusPtr s sz) e sz
+                                   return (val:rest)
+
+            putStrLn $ "calling hPutBuf with p=" ++ (show p) ++ " start=" ++ (show start) ++ "  size=" ++ (
+              show $ size * nelements) ++ " and startIndex=" ++ show startIndex
+            valList <- toList start end size -- :: (Storable a, Integral a) => IO ([a])
+            hPutBuf h start nelements
+            return valList
+  lst <- VM.unsafeWith vec readFn
+  putStrLn $ hexList lst
+
 
 -- Actual command implementations of Agent-mode commands (attach)
 processBufferValues :: String -> Double -> String -> IntPtr -> JsonRep -> Int -> IO ()
@@ -178,21 +198,15 @@ processBufferValues desc timeOffset fileName shmPtr json bufElems = do
             putStrLn $ ">> Size of an object: " ++ (show elemSize) ++ ", " ++ (show elemSizeInWords) ++ " words."
             let count = min bufElems (max count' 0)
             if (count > 0)
-            then if ((cursor + count) < bufElems)
-                  then writeBufferToFile file saveBuffer cursor count
-                  else do
-                    -- wraps around the end of the buffer.
-                    let endPart = bufElems - cursor
-                        firstPart = count - endPart
-                    writeBufferToFile file saveBuffer cursor endPart
-                    writeBufferToFile file saveBuffer 0 firstPart
+            then writeBufferToFile file saveBuffer 0 (count * elemSize)
             else return ()
             -- TODO: make this dynamic timing based on count vs bufsize.
             hFlush file -- TODO: only do this occasionally.
             threadDelay 250000
             execLoop file cursor' seqno' saveBuffer
       flushHandler :: Handle -> AsyncException -> IO ()
-      flushHandler file UserInterrupt = hClose file
+      flushHandler file UserInterrupt = do putStrLn ">> Closing file"
+                                           hClose file
       flushHandler _ ex = do self <- myThreadId
                              throwTo self ex
   file <- saveFile fileName (FileRecord "1.0.0" "now" desc (round $ timeOffset * 3600.0) json)
@@ -205,6 +219,7 @@ attach :: [String] -> IO ()
 attach args = do
   command <- parseArgs args
   putStrLn $ "got args: " ++ show args
+  putStrLn $ " read as : " ++ show command
   case command of
     Exec pid fname desc toff bufname ->
       attachAndRun pid bufname (processBufferValues desc toff fname)

@@ -81,7 +81,7 @@ json_pfx = "_ppt_json_"
 --         (4) Size (in 4-byte words) of that each element
 --         (5) Destination Vector.  Mutable.  Must be at least as big as shared memory block.
 -- Returns (number copied, last index consumed, last_seqno)
-readBuffer :: Ptr Int -> Int -> Word32 -> Int -> Int -> VM.IOVector C.CInt -> IO (Int, Int, Word32)
+readBuffer :: Ptr Int -> Int -> Word32 -> Int -> Int -> VM.IOVector C.CUInt -> IO (Int, Int, Word32)
 readBuffer src start seqno bufelems elem_sz_in_words destvector =
   do  args <- VM.new 2
       let c_elem_sz_in_words = fromIntegral elem_sz_in_words
@@ -90,22 +90,22 @@ readBuffer src start seqno bufelems elem_sz_in_words destvector =
           c_seqno = fromIntegral seqno
           c_src = castPtr src
       cnt <- [C.block| int {
-                   const int elem_sz = $(int c_elem_sz_in_words);
-                   const int nr_elems = $(int c_bufelems);
-                   const uint32_t* start = $(int* c_src);
+                   const int elem_sz = $(uint32_t c_elem_sz_in_words);
+                   const int nr_elems = $(uint32_t c_bufelems);
+                   const uint32_t* start = $(uint32_t* c_src);
                    const uint32_t *end = &start[elem_sz * nr_elems];
-                   const uint32_t *cur = &start[elem_sz * $(int c_start)];
+                   const uint32_t *cur = &start[elem_sz * $(uint32_t c_start)];
                    const uint32_t shm_sz = (end - start) / elem_sz;
                    const uint32_t start_seqno = $(uint32_t c_seqno);
                    uint32_t seq_floor;
-                   int *dest = $vec-ptr:(int* destvector);
+                   uint32_t *dest = $vec-ptr:(unsigned int* destvector);
                    uint32_t last_cur_seqno = start_seqno, stride = 0;
                    printf("last_cur_seqno set to %u, first seqno is %u\n", last_cur_seqno, *cur);
                    printf("start address: 0x%8p, cursor (%4d) address: %8p\n",
-                          start, $(int c_start), cur);
+                          start, $(uint32_t c_start), cur);
                    for (const uint32_t *s = start; s != end; s += elem_sz) {
                       if (s == cur)
-                         printf("%6d<\t", *s);
+                         printf("[%5d]\t", *s);
                       else
                          printf("%7d\t", *s);
                    }
@@ -131,17 +131,17 @@ readBuffer src start seqno bufelems elem_sz_in_words destvector =
                        seq_floor = start_seqno - nr_elems;
                      }
                      if (cur == end) {
-                        memcpy(dest, cur - (stride * elem_sz), stride * elem_sz);
+                        memcpy(dest, cur - (stride * elem_sz), stride * elem_sz * sizeof(uint32_t));
                         printf("[mid] saved %u items\n", stride);
                         dest += stride * elem_sz;
                         cur = start;
                         stride = 0;
                      }
                    }
-                   memcpy(dest, cur - (stride * elem_sz), stride * elem_sz);
+                   memcpy(dest, cur - (stride * elem_sz), stride * elem_sz * sizeof(uint32_t));
                    printf("[end] saved %u items\n", stride);
-                   $vec-ptr:(int * args)[0] = last_cur_seqno;
-                   $vec-ptr:(int * args)[1] = (cur - start) / elem_sz;
+                   $vec-ptr:(uint32_t * args)[0] = last_cur_seqno;
+                   $vec-ptr:(uint32_t * args)[1] = (cur - start) / elem_sz;
                    printf("[end] last_cur_seqno = %d.  cursor=%ld\n", last_cur_seqno, (cur - start) / elem_sz);
                    return count;
                    } |]
