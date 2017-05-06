@@ -29,6 +29,7 @@ import Data.Aeson (decode)
 data FrameElementValue = FEValue { _primValue :: PrimitiveValue
                                  , _frameMember :: FrameMember
                                  , _layoutMember :: LayoutMember }
+                       | FESeqno { _seqNo :: Word32 }
                          deriving (Eq, Show)
 
 data FrameValue = FValue { _frame :: Frame
@@ -42,7 +43,9 @@ hexList xs = (concatMap hex thisWord) ++ (' ':(hexList rest))
 
 descValue :: FrameValue -> String
 descValue (FValue (Frame n _) vals) =
-  n ++ ": " ++ (L.intercalate ", " $ map (\(FEValue p _ l) -> (lName l) ++ " " ++ show p) vals)
+  let descElem (FEValue p _ l) = (lName l) ++ " " ++ show p
+      descElem (FESeqno n) = "# " ++ show n
+  in n ++ ": " ++ (L.intercalate ", " $ map descElem vals)
 
 findMember :: String -> FrameLayout -> Maybe FrameMember
 findMember name layout =
@@ -67,6 +70,12 @@ readMember :: [LayoutMember] -> FrameLayout -> (V.Vector Word8, TargetInfo, Int)
 readMember [] _ _ = do return []
 readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
   case (lKind lmem) of
+    (LKSeqno FrontSeq) -> do
+      primValue <- MaybeT $ V.unsafeWith vec $ \ptr -> do
+        value <- peekElemOff (castPtr (plusPtr ptr startOffset) :: Ptr Word32) 0
+        return $ Just value
+      rest <- readMember lmems layout v
+      MaybeT $ return $ (:) <$> (pure $ FESeqno primValue) <*> (pure rest)
     (LKMember (FMemberElem elem) _) -> do
       let lIxOf mem = startOffset + (lOffset mem)
           mrequire :: Show a => Bool -> a -> MaybeIO a
@@ -82,6 +91,7 @@ readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
                       return $ Just $ PVRational $ float2Double value
          PInt -> do value <- peekElemOff (castPtr ptrAdded :: Ptr Word32)  0
                     return $ Just $ PVIntegral $ fromIntegral value
+         -- TODO: support both time formats
          PTime -> do high <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
                      low <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 1
                      return $ Just $ PVTime (fromIntegral high) (fromIntegral low)
@@ -134,13 +144,7 @@ decodeFromBuffer tinfo vec startOffset sz layouts =
        else MaybeT $ return $ Just 0
      mrequire (frameType < nrFrameTypes) ("Frame type is defined", frameType, nrFrameTypes)
      let layout = layouts !! frameType
-     -- Go applicative on list constructor for members
-     {-
-     MaybeT $ do putStrLn ( "decodeFromBuffer : TargetInfo (vec of length " ++ (show $ V.length vec) ++ (
-                              " ints) start index: " ++ (show startOffset) ++ "\tbyte and " ++ (
-                                  show $ length layouts) ++ " layouts: "))
-                 putStrLn (hexList $ V.toList (V.slice startOffset sz vec))
-                 return $ Just "foof" -}
+     -- TODO: Go applicative on list constructor for members
      members <- readMember (flLayout layout) layout (vec, tinfo, startOffset)
      return (FValue (flFrame layout) members)
 
@@ -157,9 +161,9 @@ decodeFromBytes tinfo json bytes = do
           vec :: V.Vector Word8
           vec = V.fromList $ BSL.unpack bytes
           bslen = BSL.length bytes
-      putStrLn $ "Frame size is " ++ show frsize ++ " bytes long,  Expecting " ++ show (
-        bslen `div` (fromIntegral frsize)) ++ " frames."
-      putStrLn $ "started with ByteString of length " ++ (show bslen)
+--      putStrLn $ "Frame size is " ++ show frsize ++ " bytes long,  Expecting " ++ show (
+--        bslen `div` (fromIntegral frsize)) ++ " frames."
+--      putStrLn $ "started with ByteString of length " ++ (show bslen)
       let numRecords = fromIntegral (BSL.length bytes `div` (fromIntegral frsize))
       res <- mapM (\idx -> runMaybeT $ decodeFromBuffer tinfo vec (idx * frsize) frsize frameLayouts) [0..numRecords]
 --      putStrLn $ " decoded " ++ show (length res) ++ " records:\n\t" ++ (L.intercalate "\n\t" $ map show res)
