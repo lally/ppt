@@ -312,7 +312,7 @@ qualBlock cfg ((PrivMember n):ns) =
 
 -- |Make member declarations out of a single literal (layed out) input member.
 makeMember :: OutputCfg -> LayoutMember -> MemberData
-makeMember cfg (LMember PTime _ _ _ _ nm) =
+makeMember cfg (LMember (PTime _) _ _ _ _ nm) =
   let timety = timeType cfg
       timeheaders = [timeHeader cfg]
   in (MB [blockdecl cfg (PP.text $ "void snapshot_" ++ nm ++ "()") PP.semi [

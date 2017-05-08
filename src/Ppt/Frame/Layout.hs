@@ -21,6 +21,9 @@ data TargetInfo = TargetInfo { tDouble :: Int
                                -- instructions.
                              } deriving (Generic, Eq, Show)
 
+timeSize tinfo ETimeVal = tTime tinfo
+timeSize tinfo (ETimeSpec _) = 2 * tTime tinfo
+
 -- |Machine Layout
 data SeqNoSide = FrontSeq | BackSeq deriving (Generic, Eq, Show)
 data LayoutKind = LKSeqno SeqNoSide
@@ -74,8 +77,8 @@ sizeOf :: TargetInfo -> Primitive -> Int
 sizeOf info PDouble = tDouble info
 sizeOf info PFloat = tFloat info
 sizeOf info PInt = tInt info
-sizeOf info PTime = tTime info
-sizeOf info PCounter = tTime info
+sizeOf info (PTime rep) = timeSize info rep
+sizeOf info PCounter = tCounter info
 
 serializeOffsets :: TargetInfo -> [LayoutMember] -> [LayoutMember]
 serializeOffsets target inmems =

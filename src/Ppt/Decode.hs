@@ -1,5 +1,6 @@
 module Ppt.Decode where
 
+import System.Directory
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Trans.Class
@@ -15,6 +16,8 @@ import Data.Vector.Storable ((!), (!?))
 import Foreign.Storable
 import qualified Data.List as L
 import Data.Vector.Storable.ByteString
+import qualified Data.Foldable as F
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Storable as V
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
@@ -91,11 +94,12 @@ readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
                       return $ Just $ PVRational $ float2Double value
          PInt -> do value <- peekElemOff (castPtr ptrAdded :: Ptr Word32)  0
                     return $ Just $ PVIntegral $ fromIntegral value
-         -- TODO: support both time formats
-         PTime -> do high <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
-                     low <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 1
-                     return $ Just $ PVTime (fromIntegral high) (fromIntegral low)
-         PCounter -> return $ Just $ PVCounter []
+         (PTime (ETimeSpec _)) -> do high <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
+                                     low <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 1
+                                     return $ Just $ PVTime (fromIntegral high) (fromIntegral low)
+         PTime ETimeVal-> do high <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
+                             return $ Just $ PVTime (fromIntegral high) 0
+         PCounter -> return $ Just $ PVCounter [] PCNone
          PByte -> return Nothing -- $ Just $ PVIntegral 0
       let thisResult = FEValue <$> (pure primValue) <*> (findMember (frMemName lmem) layout) <*> pure lmem
       rest <- readMember lmems layout v
@@ -216,3 +220,15 @@ decodeFileToConsole filename maxNr = do
   contents <- BSL.readFile filename
   values <- decodeFile x64 contents
   putStrLn $ ">> " ++ (L.intercalate "\n>> " $ map descValue $ take maxNr values)
+
+
+decodeFileToCSVs filename destDir = do
+  -- This will fail quickly if we can't create the directory.
+  createDirectory destDir
+  contents <- BSL.readFile filename
+  values <- decodeFile x64 contents
+  let csvs = F.foldl' (\hm fv -> HM.insertWith (++) (_frameName $ _frame fv) [fv] hm) HM.empty values
+  -- TODO: Format header for each file
+  -- TODO: format rows for each file
+  -- TODO: write out files.
+  return ()

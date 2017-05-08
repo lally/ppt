@@ -149,24 +149,23 @@ generateCommand args =
           putStrLn (L.concatMap L.concat r2)
           putStrLn (L.concatMap L.concat r3)
           putStrLn err
-        Right opts -> do
-          let optStr = show $ concat opts
+        Right theopts -> do
+          let optStr = show $ concat theopts
           -- process options here -- already parsed.  Load the file
           -- and change the EmitOptions appropriately.
           putStrLn optStr
-          result <- P.parseFile fname
+          result <- P.parseFile fname (normalize $ concat theopts)
           case result of
             Left err -> do
               putStrLn ("Error: " ++ err)
               return ()
             Right (PR.Buffer emitopts frames) -> do
               let partialOpts = normalize $ concat opts
-                  finalEmitOptions = (P.optionUpdate emitopts partialOpts)
-                  layout = L.compileFrames x64Layout finalEmitOptions frames
+                  layout = L.compileFrames x64Layout emitopts frames
               case layout of
                 Left s -> putStrLn ("Error in compilation: " ++ s)
                 Right layouts -> do
-                  let files = CP.cppFiles finalEmitOptions layouts
+                  let files = CP.cppFiles emitopts layouts
                   forM_ files (\(fname, text) -> writeFile fname (PP.render text)) 
               return ()
           return ()

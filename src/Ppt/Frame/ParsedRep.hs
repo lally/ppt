@@ -12,15 +12,16 @@ import Control.Lens hiding (element, noneOf)
  information for code generation and for placing into the buffer.
 -}
 
--- |Common to both Parsed Rep and Machine Layout.  Presumed x86_64 type sizes.
-data Primitive = PDouble | PFloat | PInt | PTime
-               | PCounter | PByte deriving (Generic, Eq, Show)
+data PCounterConfig = PCNone
+                    | PIntelCounter Int Int Int
+                    deriving (Generic, Eq, Show)
 
+-- |Common to both Parsed Rep and Machine Layout.  Presumed x86_64 type sizes.
 -- |Used in evaluation.  Some types are promoted.  PrimType paired with a value.
 data PrimitiveValue = PVRational Double
                     | PVIntegral Int
                     | PVTime Int Int
-                    | PVCounter [Int]
+                    | PVCounter [Int] PCounterConfig
                     deriving (Generic, Eq, Show)
 
 -- |Parsed Representation
@@ -39,6 +40,11 @@ data ETimeSource = ETimeClockRealtime
 
 -- |gettimeofday() vs clock_gettime()
 data ETimeRep = ETimeVal | ETimeSpec ETimeSource deriving (Generic, Eq, Show)
+
+data Primitive = PDouble | PFloat | PInt | PTime ETimeRep
+               | PCounter | PByte deriving (Generic, Eq, Show)
+
+
 data ERuntime = ERuntime { erMultithread :: Bool } deriving (Generic, Eq, Show)
 data ETag = Tag String String -- ^Key, Value
             deriving (Generic, Eq, Show) 
@@ -109,7 +115,8 @@ data FrameElement = FMemberElem FrameMember
 -- validate any circular references.
 
 --data FrameEvaluator = FEvaluate { feValues :: Map String PrimitiveValue }
-data Frame = Frame String [FrameElement] deriving (Generic, Eq, Show)
+data Frame = Frame { _frameName :: String
+                   , _frameElements :: [FrameElement] } deriving (Generic, Eq, Show)
 
 -- Look into AESON-ing this thing, to serialize into the generated
 -- source, and to shove into generated output for python
@@ -118,6 +125,7 @@ data Buffer = Buffer EmitOptions [Frame] deriving (Generic, Eq, Show)
 
 
 instance ToJSON Primitive
+instance ToJSON PCounterConfig
 instance ToJSON PrimitiveValue
 instance ToJSON ELanguage
 instance ToJSON ETimeSource
@@ -136,6 +144,7 @@ instance ToJSON Frame
 instance ToJSON Buffer
 
 instance FromJSON Primitive
+instance FromJSON PCounterConfig
 instance FromJSON PrimitiveValue
 instance FromJSON ELanguage
 instance FromJSON ETimeSource

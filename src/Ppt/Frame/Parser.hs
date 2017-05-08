@@ -43,43 +43,43 @@ ch = char
 
 type Parser t = GenParser Char () t
 
-primType = ( resvd "double" >> return PDouble )
-           <|> ( resvd "int" >> return PInt )
-           <|> ( resvd "float" >> return PFloat )
-           <|> ( resvd "time" >> return PTime )
-           <|> ( resvd "counter" >> return PCounter )
-           <?> "type name"
+primType o = ( resvd "double" >> return PDouble )
+             <|> ( resvd "int" >> return PInt )
+             <|> ( resvd "float" >> return PFloat )
+             <|> ( resvd "time" >> return (PTime (_eTimeRep o)))
+             <|> ( resvd "counter" >> return PCounter )
+             <?> "type name"
 -- TODO: replace primType here with a higher-level production that
 -- also takes interval and other keywords.  They form a list of
 -- qualified-type-specifiers, which get processed by another function
 -- into the FMemberElem.
-element :: Bool -> Parser [FrameElement]
-element mul = do { typ <- primType
-                 ; names <- identifier `sepBy1` comma
-                 ; semi
-                 ; return (map (\n -> FMemberElem $ FMember typ n mul) names)
-                 }
+element :: Bool -> EmitOptions -> Parser [FrameElement]
+element mul o = do { typ <- primType o
+                   ; names <- identifier `sepBy1` comma
+                   ; semi
+                   ; return (map (\n -> FMemberElem $ FMember typ n mul) names)
+                   }
 
 -- |Primary member parser.  This will need some additions over time.
 -- The syntax will be:
 -- - interval time duration;
 -- - int count;
 -- - [live] [exported] stat field = gap(duration) / count
-frameMember :: Parser [FrameElement]
-frameMember = do { try (resvd "interval" >> element True) }
-              <|> element False
-              <?> "member declaration"
+frameMember :: EmitOptions -> Parser [FrameElement]
+frameMember opts = do { try (resvd "interval" >> (element True opts)) }
+                   <|> (element False opts)
+                   <?> "member declaration"
 
-frame = do { resvd "frame"
-           ; name <- identifier
-           ; ch '{'
-           ; ws
-           ; members <- many frameMember
-           ; ws
-           ; ch '}'
-           ; ws
-           ; return (Frame name (concat members))
-           }
+frame opts = do { resvd "frame"
+                ; name <- identifier
+                ; ch '{'
+                ; ws
+                ; members <- many (frameMember opts)
+                ; ws
+                ; ch '}'
+                ; ws
+                ; return (Frame name (concat members))
+                }
 
 
 emitType :: Parser ELanguage
@@ -290,13 +290,16 @@ parseText p input fname = parse (do { ws
 tparse :: Show a => Parser a -> String -> Either ParseError a
 tparse p input = parseText p input "input"
 
-fileParser = do { ws
-                ; head <- headParser
-                ; frames <- many frame
-                ; return (Buffer head frames) }
+fileParser :: [PartialOption] -> Parser Buffer
+fileParser opts = do { ws
+                     ; head <- headParser
+                     ; let eopts = optionUpdate head opts
+                     ; frames <- many (frame eopts)
+                     ; return (Buffer head frames) }
+--                   finalEmitOptions = (
 
-parseFile :: String -> IO (Either String Buffer)
-parseFile fname = do  {
+parseFile :: String -> [PartialOption] -> IO (Either String Buffer)
+parseFile fname opts = do  {
     let showLeft :: Show a => Either a b -> Either String b
         showLeft (Left a) = Left $ show a
         showLeft (Right b) = Right b
@@ -304,7 +307,7 @@ parseFile fname = do  {
         showErr fname ex = return $ Left $ fname ++ ": " ++ show ex
   ; res <- handle (showErr fname) (do {
     filetext <- readFile fname ;
-    return $ showLeft $ parse fileParser fname filetext
+    return $ showLeft $ parse (fileParser opts)  fname filetext
     })
   ; return res
   }

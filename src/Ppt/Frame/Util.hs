@@ -30,7 +30,7 @@ rcompose (Right r) f g = g r
 
 parseMember :: String -> [MemberData]
 parseMember str =
-  let (Right mem) = tparse frameMember (str ++ ";")
+  let (Right mem) = tparse (frameMember opts) (str ++ ";")
       makeLMember m =
         let (FMemberElem frm) = m
             ty = fmType frm
@@ -40,7 +40,7 @@ parseMember str =
 
 parseFrame :: String -> Either String [FrameLayout]
 parseFrame str =
-  let res = tparse frame str
+  let res = tparse (frame opts) str
   in rcompose res show (\n -> compileFrames x64 opts [n])
 
 genFrame :: String -> Either String [(String, PP.Doc)]
@@ -54,7 +54,7 @@ ls (Right r) = Right r
 
 genFile :: String -> Either String [(String, PP.Doc)]
 genFile str = do
-  (Buffer emitopts frames) <- ls $ tparse fileParser str
+  (Buffer emitopts frames) <- ls $ tparse (fileParser []) str
   compiled <- compileFrames x64 emitopts frames
   return $ cppFiles emitopts compiled
 
