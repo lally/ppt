@@ -16,6 +16,7 @@ import Data.Vector.Storable ((!), (!?))
 import Foreign.Storable
 import qualified Data.List as L
 import Data.Vector.Storable.ByteString
+import System.IO
 import qualified Data.Foldable as F
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Storable as V
@@ -27,7 +28,7 @@ import qualified Data.ByteString as B
 import qualified Data.Binary as DB
 import qualified Data.Binary.Get as DBG
 import Data.Word
-import Data.Aeson (decode) 
+import Data.Aeson (decode)
 
 data FrameElementValue = FEValue { _primValue :: PrimitiveValue
                                  , _frameMember :: FrameMember
@@ -38,6 +39,14 @@ data FrameElementValue = FEValue { _primValue :: PrimitiveValue
 data FrameValue = FValue { _frame :: Frame
                          , _values :: [FrameElementValue] }
                   deriving (Eq, Show)
+
+data DecodedRow = DRow { _rElements :: [FrameElement]
+                       , _rSeqno :: Int
+                       , _rValues :: [PrimitiveValue]
+                       } deriving (Eq, Show)
+data DecodedFrame = DFrame { _dFrame :: Frame
+                           , _dRows :: [DecodedRow]
+                           } deriving (Eq, Show)
 
 hexList [] = ""
 hexList xs = (concatMap hex thisWord) ++ (' ':(hexList rest))
@@ -221,14 +230,46 @@ decodeFileToConsole filename maxNr = do
   values <- decodeFile x64 contents
   putStrLn $ ">> " ++ (L.intercalate "\n>> " $ map descValue $ take maxNr values)
 
+-- Always returns the sequence number *first*.  Also assumes its first.
+decodeValue :: FrameValue -> (Int, [PrimitiveValue])
+decodeValue (FValue fr ((FESeqno s):vals)) =
+  (fromIntegral s, map getPrim vals)
+  where getPrim (FEValue p _ _) = p
 
+-- |Prototypical simple sorter.  Sorts decodded FrameValues into a
+-- list of DecocdedFrame values.  Each element in the output list
+-- contains a list of rows.  Each input corresponds to a row.
+sortValues :: [FrameValue] -> [DecodedFrame]
+sortValues inputs =
+  map snd $ HM.toList $ foldr updateForFV HM.empty inputs
+  where
+    mergeEntry :: DecodedFrame -> DecodedFrame -> DecodedFrame
+    mergeEntry (DFrame fr rows) (DFrame _ [r]) = DFrame fr (r:rows)
+    makeEntry fr seq row = DFrame fr [DRow (_frameElements fr) seq row]
+    updateForFV :: FrameValue -> HM.HashMap Frame DecodedFrame -> HM.HashMap Frame DecodedFrame
+    updateForFV fv@(FValue fr vals) mp =
+      let (seq, row) = decodeValue fv
+      in HM.insertWith mergeEntry fr (makeEntry fr seq row) mp
+
+-- |Currently does no processing. Opens 'filename' and writes out CSVs
+-- - one per found frame type - to 'destDir'.
 decodeFileToCSVs filename destDir = do
+  let writeCsv dir (DFrame fr rows) = do
+        let fileName = (_frameName fr) ++ ".csv"
+            firstRow = head rows
+            elemName (FMemberElem (FMember _ n _)) = n
+            elemName (FCalculatedElem _ _ n _ _) = n
+            headers = L.intercalate ", " $ map elemName $ _rElements firstRow
+            saveRow (DRow _ n vs) = L.intercalate ", " $ (show n):(map show vs)
+        h <- openFile (destDir ++ "/" ++ fileName) WriteMode
+        hPutStrLn h headers
+        mapM_ (\r -> hPutStrLn h $ saveRow r) rows
+        hClose h
   -- This will fail quickly if we can't create the directory.
   createDirectory destDir
   contents <- BSL.readFile filename
   values <- decodeFile x64 contents
-  let csvs = F.foldl' (\hm fv -> HM.insertWith (++) (_frameName $ _frame fv) [fv] hm) HM.empty values
-  -- TODO: Format header for each file
-  -- TODO: format rows for each file
-  -- TODO: write out files.
-  return ()
+--  let csvs = F.foldl' (\hm fv -> HM.insertWith (++) (_frameName $ _frame fv) [fv] hm) HM.empty values
+  let csvs = sortValues values
+  mapM_ (writeCsv destDir) csvs
+  return $ map (_frameName . _dFrame) csvs

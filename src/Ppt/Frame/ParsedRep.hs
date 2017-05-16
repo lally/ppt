@@ -4,6 +4,7 @@
 module Ppt.Frame.ParsedRep where
 import GHC.Generics
 import Data.Aeson
+import Data.Hashable
 import Control.Lens hiding (element, noneOf)
 {- |Parsing, Calculation, and Layout
 
@@ -123,6 +124,8 @@ data Frame = Frame { _frameName :: String
 -- post-processing.
 data Buffer = Buffer EmitOptions [Frame] deriving (Generic, Eq, Show)
 
+instance Hashable Frame where
+  hashWithSalt salt f = hashWithSalt salt (_frameName f)
 
 instance ToJSON Primitive
 instance ToJSON PCounterConfig
