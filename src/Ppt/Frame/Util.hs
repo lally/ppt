@@ -42,7 +42,7 @@ parseMember str =
 parseFrame :: String -> Either String [FrameLayout]
 parseFrame str =
   let res = tparse (frame opts) str
-  in rcompose res show (\n -> compileFrames x64 [n])
+  in rcompose res show (\n -> compileFrames' x64 [n])
 
 genFrame :: String -> Either String [(String, PP.Doc)]
 genFrame str =
@@ -56,7 +56,7 @@ ls (Right r) = Right r
 genFile :: String -> Either String [(String, PP.Doc)]
 genFile str = do
   (Buffer emitopts frames) <- ls $ tparse (fileParser []) str
-  compiled <- compileFrames x64  frames
+  compiled <- compileFrames' x64  frames
   return $ cppFiles emitopts compiled
 
 mkInt n = FMemberElem $ FMember PInt n False

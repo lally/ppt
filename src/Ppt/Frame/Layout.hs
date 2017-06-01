@@ -230,7 +230,7 @@ alignOfAll tinfo frames = maximum $ padSz:sizes
   where
     padSz = sizeOf tinfo PInt  -- for seqno / type descrim
     sizes = map ((alignOf tinfo) . fmType) frames
-
+{-
 -- |Returns (Alignment, front pad bytes, back pad bytes.  Both cases
 -- assume an Int seqno added on front and back.
 -- NOTE: if we do the optimization above, this function has to then
@@ -254,7 +254,7 @@ calcBlockPadding tinfo frames =
               then align - lastAlignSz - padSz
               else (align - lastAlignSz) + frontPad
 
-
+-}
 -- |Takes from the first list until the function returns False.  Then
 -- returns the partition of where the function returned false.
 repPartition :: ([a] -> Bool) -> [a] -> ([a], [a])
@@ -282,10 +282,10 @@ induceWhile score permute priorMetric maxCnt prior =
   in if thisMetric >= priorMetric
      then induceWhile score permute thisMetric (maxCnt - 1 ) thisRound
      else prior
-
+{-
 listSize :: (Num n) => [(n, a)] -> n
 listSize s = sum $ map fst s
-
+-}
 isAligned :: (Num n, Ord n) => n -> [(n, a)] -> Bool
 isAligned _ (_:[]) = True
 isAligned align items = align >= (sum $ map fst items)
@@ -313,7 +313,7 @@ moduloFit align frontEnd backEnd internals =
   let (frontSz, frontItem) = frontEnd
       (backSz, backItem) = backEnd
       rawSorted = sortTagged internals
-      rawSortedSz = listSize rawSorted
+      rawSortedSz = sum $ map fst rawSorted {- listSize -}
       -- This works b/c any item that's bigger than align is a higher
       -- power of align.
       initialBlockSet = repPartitionList (isAligned align) rawSorted
@@ -355,6 +355,7 @@ extractBlock tinfo nr f@(Frame n mems) =
 -- |The minimum length of the FrameMemberBlock, before we add the back seqno or padding.
 minLen :: FrameMemberBlock -> Int
 minLen fmb = sum $ map lSize $ concat [ _frInternalElements fmb, _frFront fmb]
+{-
 
 -- |Size of the first padding member in the list.
 padSz memb =
@@ -363,7 +364,6 @@ padSz memb =
     padOf [] =  Nothing
     padOf ((LMember _ _ _ _ (LKPadding sz) _):_) = Just sz
     padOf (_:ts) = padOf ts
-
 
 padFront memb = memb { _frFront = (_frFront memb) ++ frontPadding }
   where frontPad 0 = []
@@ -386,7 +386,7 @@ padBack bytes memb
     backPad n = [LMember PByte 0 1 n (LKPadding n) "__back_padding"]
     backPaddingAmt = bytes - (minLen memb) - padSz memb - 4
     backPadding = backPad backPaddingAmt
-
+-}
 determineSizes :: [FrameMemberBlock] -> Int
 determineSizes mems = maximum $ map minLen mems
 
@@ -455,7 +455,7 @@ sortMembers tinfo (FLayout n f mems) =
                   ]
           in FLayout n f (filledFront ++ remainder)
      else FLayout n f mems
-
+{-
 setOffsets :: [LayoutMember] -> Either String [LayoutMember]
 setOffsets mems =
   offset 0 mems
@@ -519,7 +519,7 @@ compileFrames target frs =
                Left s -> Left s
                Right r -> Right ((x { flLayout = r }):rs)
   in foldOffsets withBacks
-
+-}
 mlast :: [a] -> Maybe a
 mlast [] = Nothing
 mlast [x] = Just x
