@@ -17,6 +17,7 @@ import Numeric
 import Ppt.Configuration
 import Ppt.ElfProcess
 import Ppt.Frame.Layout
+import Ppt.Frame.Util
 import Ppt.StaticInstrumentation
 import Ppt.SIParser as SIP
 import System.Exit
@@ -186,7 +187,7 @@ attachAndRun pid bufferName runFn = do
         abiStr <- mabiStr
         json <- (decode $ BSL.fromStrict abiStr) :: Maybe JsonRep
         elemSize <- frameSize json
-        return (json, fromIntegral $ (roundUp 392 elemSize) + (elemSize * numElementsInBuffer))
+        return (json, fromIntegral $ (roundUp (fromIntegral ctrlStructSz) elemSize) + (elemSize * numElementsInBuffer))
   checkErrors [
     check ("Failed to read symbol in pid " ++ show pid) $ isJust moldPid,
     check ("Process appears busy with ppt pid " ++ show oldPid) $ oldPid /= 0,
@@ -197,6 +198,8 @@ attachAndRun pid bufferName runFn = do
   shmId <- throwErrnoIfMinus1 "Failed to allocate shared memory" (
     [C.exp| int {shmget(IPC_PRIVATE, $(size_t totalBufferSize), IPC_CREAT | IPC_EXCL | 0600)} |])
   putStrLn $ "Got shared memory handle " ++ show shmId
+  putStrLn $ "  Element size is " ++ show (frameSize json)
+  showLayoutData json
   let cleanup pid shmId = do
           moldHandle <- swapIntegerInProcess pid hmem_sym (fromIntegral shmId) 0
           checkErrors [

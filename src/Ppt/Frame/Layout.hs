@@ -81,7 +81,7 @@ sizeOf :: TargetInfo -> Primitive -> Int
 sizeOf info PDouble = tDouble info
 sizeOf info PFloat = tFloat info
 sizeOf info PInt = tInt info
-sizeOf info (PTime rep) = timeSize info rep
+sizeOf info (PTime rep) = tTime info --timeSize info rep
 sizeOf info PCounter = tCounter info
 sizeOf info PByte = 1
 
@@ -92,6 +92,11 @@ alignOf info PInt = tInt info
 alignOf info (PTime rep) = tCounter info
 alignOf info PCounter = tCounter info
 alignOf info PByte = 1
+
+alignRemainder :: Int -> Int -> Int
+alignRemainder align amt
+  | align == amt = 0
+  | otherwise = align - (amt `mod` align)
 
 roundTo :: (Integral n) => n -> n -> n
 roundTo align val
@@ -122,68 +127,6 @@ serializeOffsets target inmems =
    5. Add padding and back sequence number.
 
 -}
-
-diffName :: String -> Int -> String
-diffName nm 0 = nm ++ "_start"
-diffName nm 1 = nm ++ "_end"
-diffName nm n = nm ++ "_nr" ++ (show n)
-
--- |Initial layout information for a given FrameElement.  This is stages 1-2.
-baseLayout :: TargetInfo -> FrameElement -> [LayoutMember]
-baseLayout target (FMemberElem elem@(FMember ty nm True)) =
-  let sz = sizeOf target ty
-      elm = \n -> LKMember elem (Just (n,2))
-  in [
-    LMember ty 0 sz sz (elm 0) (diffName nm 0),
-    LMember ty 0 sz sz (elm 1) (diffName nm 1)
-   ]
-baseLayout target (FMemberElem elem@(FMember ty nm False)) =
-  let sz = sizeOf target ty
-      elm = LKMember elem Nothing
-  in [LMember ty 0 sz sz elm nm]
-baseLayout _ (FCalculatedElem _ _ _ _ _) = []
-
-frontSeqnoName = "__ppt_seqno"
-descrimName = "__ppt_type"
-frontPaddingName = "__ppt_pad_front"
-backPaddingName = "__ppt_pad_back"
-backSeqnoName = "__ppt_seqno_back"
-
-lkName (LKSeqno FrontSeq) = frontSeqnoName
-lkName (LKSeqno BackSeq) = backSeqnoName
-lkName (LKTypeDescrim _) = descrimName
-lkName (LKMember (FMember _ nm _)  _) = nm
-lkName (LKPadding _) = "__ppt_pad" -- This has to be combined with a number.
-
-addPrefixes tinfo multiple =
-  let addDescrim =
-        if length multiple > 1
-        then [LMember PInt 0 descSz descSz (LKTypeDescrim descSz) descrimName]
-        else []
-      seqnSz = tInt tinfo
-      descSz = seqnSz -- TODO: resize this to be ceil_8(log_2(length multiple))
-  in map (\(FLayout n f mems) -> FLayout n f ((
-             LMember PInt 0 seqnSz seqnSz (LKSeqno FrontSeq) frontSeqnoName):
-                                              (addDescrim ++ mems))) multiple
-
--- |Removes the earliest set of items s.t. (sum $ map fn items). <=
--- total.  Returns ([sum set], [remainder]).  Only works well if the
--- input is sorted in descending order.
-takeSum :: (Num n, Ord n)  => n -> (a -> n) -> [a] -> ([a], [a])
-takeSum desiredTotal func elements =
-  let takeSum' 0 _ xs (taken, rem) = (taken, rem ++ xs)
-      takeSum' total fn [] (taken, rem) = (taken, rem)
-      takeSum' total fn (x:xs) (taken, rem) =
-        let val = fn x
-        in if val <= total
-           then takeSum' (total - val) fn xs (taken ++ [x], rem)
-           else takeSum' total fn xs (taken, rem ++ [x])
-  in takeSum' desiredTotal func elements ([], [])
-
-alignRemainder :: Int -> Int -> Int
-alignRemainder align amt
-  | align == amt = 0
-  | otherwise = align - (amt `mod` align)
 
 
 -- |Intermediate type during layout.  We separate out the raw
@@ -230,41 +173,14 @@ alignOfAll tinfo frames = maximum $ padSz:sizes
   where
     padSz = sizeOf tinfo PInt  -- for seqno / type descrim
     sizes = map ((alignOf tinfo) . fmType) frames
-{-
--- |Returns (Alignment, front pad bytes, back pad bytes.  Both cases
--- assume an Int seqno added on front and back.
--- NOTE: if we do the optimization above, this function has to then
--- take the order into account, or the optimizing function will just
--- have to recalculate, based off this original data.
-calcBlockPadding :: TargetInfo ->
-                    [FrameMember] ->
-                    (Int, Int, Int)
-calcBlockPadding tinfo frames =
-  (align, frontPad, backPad)
-  where
-    padSz = sizeOf tinfo PInt
-    sizes = map ((sizeOf tinfo) . fmType) frames
-    align = maximum $ padSz:sizes
-    frontPad = align - padSz
-    lastAlignSz = (sum sizes) `mod` align
-    -- The end is tricky. If we have enough space to fit the seequence
-    -- number with the last 'align'-wide group of frame members, put
-    -- it there.  Otherwise put it in its own align-wide group.
-    backPad = if (align - lastAlignSz) >= padSz
-              then align - lastAlignSz - padSz
-              else (align - lastAlignSz) + frontPad
 
--}
 -- |Takes from the first list until the function returns False.  Then
 -- returns the partition of where the function returned false.
 repPartition :: ([a] -> Bool) -> [a] -> ([a], [a])
 repPartition fn items =
-  let cTake fn passed [] = (passed, [])
-      cTake fn passed rest@(r:rs) =
-        if fn (passed ++ [r])
-        then cTake fn (passed ++ [r]) rs
-        else (passed, rest)
-  in cTake fn [] items
+  let taken = last $ takeWhile fn $ L.inits items
+  in (taken, drop (length taken) items)
+--  in cTake fn [] items
 
 repPartitionList :: ([a] -> Bool) -> [a] -> [[a]]
 repPartitionList fn items =
@@ -273,8 +189,15 @@ repPartitionList fn items =
       induce fn (l, r) = [l] ++ induce fn (repPartition fn r)
   in induce fn (repPartition fn items)
 
--- Simple hill climber
-induceWhile :: (Ord met, Integral met, Eq n, Num n) => (t a -> met) -> (t a -> t a) -> met -> n -> t a -> t a
+-- |Simple hill climber.  Tries to beat 'priorMetric' by running
+-- permute on 'prior'.  Will try up to 'maxCnt' permutations.
+induceWhile :: (Ord met, Integral met, Eq n, Num n) =>
+               (t a -> met) ->
+               (t a -> t a) ->
+               met ->
+               n ->
+               t a ->
+               t a
 induceWhile score permute priorMetric 0 prior = prior
 induceWhile score permute priorMetric maxCnt prior =
   let thisRound = permute prior
@@ -282,10 +205,7 @@ induceWhile score permute priorMetric maxCnt prior =
   in if thisMetric >= priorMetric
      then induceWhile score permute thisMetric (maxCnt - 1 ) thisRound
      else prior
-{-
-listSize :: (Num n) => [(n, a)] -> n
-listSize s = sum $ map fst s
--}
+
 isAligned :: (Num n, Ord n) => n -> [(n, a)] -> Bool
 isAligned _ (_:[]) = True
 isAligned align items = align >= (sum $ map fst items)
@@ -335,11 +255,12 @@ layoutMember tinfo fr@(FMember ty nm False) =
 
 extractBlock :: TargetInfo -> Int -> Frame -> FrameMemberBlock
 extractBlock tinfo nr f@(Frame n mems) =
-  let seqName FrontSeq = "__seqno_front"
-      seqName BackSeq = "__seqno_back"
+  let seqName FrontSeq = "__ppt_seqno"
+      seqName BackSeq = "__ppt_seqno_back"
       seqNo t = LMember PInt 0 (tInt tinfo) (tInt tinfo) (LKSeqno t) $ seqName t
       front = if nr > 1
-              then (8, [seqNo FrontSeq, LMember PInt 0 (tInt tinfo) (tInt tinfo) (LKTypeDescrim nr) "__type_descrim"])
+              then (8, [seqNo FrontSeq, LMember PInt 0 (tInt tinfo) (tInt tinfo) (LKTypeDescrim nr)
+                         "__ppt_type"])
               else (4, [seqNo FrontSeq])
       back = (4, [seqNo BackSeq])
       (wrRealMems, calculated) = partition (\c -> case c of
@@ -355,38 +276,7 @@ extractBlock tinfo nr f@(Frame n mems) =
 -- |The minimum length of the FrameMemberBlock, before we add the back seqno or padding.
 minLen :: FrameMemberBlock -> Int
 minLen fmb = sum $ map lSize $ concat [ _frInternalElements fmb, _frFront fmb]
-{-
 
--- |Size of the first padding member in the list.
-padSz memb =
-  maybe 0 id (padOf $ _frBack memb)
-  where
-    padOf [] =  Nothing
-    padOf ((LMember _ _ _ _ (LKPadding sz) _):_) = Just sz
-    padOf (_:ts) = padOf ts
-
-padFront memb = memb { _frFront = (_frFront memb) ++ frontPadding }
-  where frontPad 0 = []
-        frontPad n = [LMember PByte 0 1 n (LKPadding n) "__front_padding"]
-        sz lmems = sum $ map lSize lmems
-        align = _frAlign memb
-        frontPaddingAmt =
-          let front = last $ takeWhile (\s -> (sum $ map lSize s) <= align) $ map (
-                \l -> (_frFront memb) ++ l) (L.inits $ _frInternalElements memb)
-              frsz = {-traceShow ("padFront for ", front, sz front)-} (sz front)
-          in if align /= frsz
-             then align - (frsz `mod` align)
-             else 0
-        frontPadding = frontPad frontPaddingAmt
-
-padBack bytes memb
-  | bytes >= (4+ minLen memb) = memb { _frBack = backPadding ++ (_frBack memb) }
-  where
-    backPad 0 = []
-    backPad n = [LMember PByte 0 1 n (LKPadding n) "__back_padding"]
-    backPaddingAmt = bytes - (minLen memb) - padSz memb - 4
-    backPadding = backPad backPaddingAmt
--}
 determineSizes :: [FrameMemberBlock] -> Int
 determineSizes mems = maximum $ map minLen mems
 
@@ -394,7 +284,7 @@ interPad :: Int -> [LayoutMember] -> Either String [LayoutMember]
 interPad off [] = Right []
 interPad off (t:ts)
   | (off `mod` (lAlignment t)) == 0 =
-    {-traceShow ("Proceeding: ", off, t) $ -}liftM2 mappend (Right [t { lOffset = off }])  (interPad (off + lSize t) ts)
+    {-traceShow ("Proceeding: ", off, t) $ -} liftM2 mappend (Right [t { lOffset = off }])  (interPad (off + lSize t) ts)
   | otherwise =
     let algn = lAlignment t
         padAmt = algn - (off `mod` algn)
@@ -414,112 +304,8 @@ compileFrames' tinfo frames =
       memBlocks = map ({-padFront .-} (extractBlock tinfo frameLen)) frames
       blockPresize = determineSizes memBlocks
       blockFinalSize = (roundTo (tInt tinfo) blockPresize) + (tInt tinfo)
---      sizedBlocks = map (padBack blockFinalSize) memBlocks
   in {-traceShow (tinfo, frames) $ -}sequence $ map makeFLayout memBlocks {- sizedBlocks -}
 
--- |Compacts a FrameLayout by sorting the members to fill all
--- available space.  Algorithm: We're filling in blocks of size
--- 'align' bytes each.  So, scan for the LayoutMembers that aren't
--- FrameElements (like sequence numbers) at the front of the list.
--- See how many blocks we fill that way.  If we need to fill the last
--- block, scan the member list in sorted order, and try to find a set
--- of them that fit the size.
-sortMembers :: TargetInfo -> FrameLayout -> FrameLayout
-sortMembers tinfo (FLayout n f mems) =
-  let align :: Int
-      align = maximum $ map lSize mems
-      -- Generally we use lSize and align to the largest size.
-      -- lAlignment /= lSize only when we're doing padding.
-      isMember (LKMember _ _) = True
-      isMember _ = False
-      (front, restRaw) = break (isMember . lKind) mems
-      frontSz = sum $ map lSize front
-      frontRem = alignRemainder align frontSz
-      rest = sortOn (\m -> -1 * lSize m) restRaw
-      restMax = lSize $ head rest
-  in if (length rest) > 0
-     then let (frontRest, remainder) = takeSum frontRem lSize rest
-              prefilledFront = front ++ frontRest
-              filledFront =
-                let pad = alignRemainder (
-                      sum $ map lSize prefilledFront) align
-                in if pad == 0
-                   then prefilledFront
-                   else prefilledFront ++ [
-                  LMember { lType = PByte
-                          , lOffset = 0
-                          , lAlignment = 1
-                          , lSize = pad
-                          , lKind = LKPadding pad
-                          , lName = frontPaddingName }
-                  ]
-          in FLayout n f (filledFront ++ remainder)
-     else FLayout n f mems
-{-
-setOffsets :: [LayoutMember] -> Either String [LayoutMember]
-setOffsets mems =
-  offset 0 mems
-  where offset _ [] = Right []
-        offset start (x:xs) =
-          if (start `mod` lAlignment x) /= 0
-          then Left ("Wrong alignment (" ++ show start ++ ") for " ++ show x)
-          else let rest = offset (start + lSize x) xs
-               in case rest of
-                    Left err -> rest
-                    Right remain -> Right (
-                      x { lOffset = start }:remain)
-
-
--- Lay out frames
-compileFrames :: TargetInfo -> [Frame] -> Either String [FrameLayout]
-compileFrames target frs =
-  let baseFrame target fr@(Frame nm elems) =
-        FLayout nm fr (concatMap (baseLayout target) elems)
-      frameSize ::FrameLayout -> Int
-      frameSize layout = sum $ map lSize $ flLayout layout
-      -- frames before we equalize their sizes and add the back seqno.
-      prepad :: [FrameLayout]
-      prepad = map (sortMembers target) $ addPrefixes target $ map (baseFrame target) frs
-      maxSize = maximum $ map frameSize prepad
-      -- Now figure out how much to pad to.  TODO: this is both
-      -- affected by the alignment of the sequence number (the rest of
-      -- each is already aligned) and the tPadTo value in the
-      -- TargetInfo.
-      padSizeTo = maxSize + (tInt target)
-      addBack :: Int -> FrameLayout -> FrameLayout
-      addBack size frame =
-        let padAmount = alignRemainder size $ sum $ map lSize $ flLayout frame
-            backSeq = LMember { lType = PInt
-                              , lOffset = 0
-                              , lAlignment = tInt target
-                              , lSize = tInt target
-                              , lKind = LKSeqno BackSeq
-                              , lName = backSeqnoName }
-        in if padAmount == 0
-           then frame { flLayout = (flLayout frame) ++ [backSeq]}
-           else frame { flLayout = (flLayout frame) ++ [
-                          LMember { lType = PByte
-                                  , lOffset = 0
-                                  , lAlignment = 1
-                                  , lSize = padAmount
-                                  , lKind = LKPadding padAmount
-                                  , lName = backPaddingName}
-                          , backSeq]}
-       -- LOOKUP: List monad for applicative use of setOffsets on list
-       -- of all frames.
-      withBacks = map (addBack padSizeTo) prepad
-      foldOffsets :: [FrameLayout] -> Either String [FrameLayout]
-      foldOffsets [] = Right []
-      foldOffsets (x:xs) =
-        let ret = setOffsets $ flLayout x
-            children = foldOffsets xs
-        in case children of
-             Left _ -> children
-             Right rs -> case ret of
-               Left s -> Left s
-               Right r -> Right ((x { flLayout = r }):rs)
-  in foldOffsets withBacks
--}
 mlast :: [a] -> Maybe a
 mlast [] = Nothing
 mlast [x] = Just x

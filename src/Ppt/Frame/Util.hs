@@ -1,4 +1,4 @@
-module Ppt.Frame.Util where
+module Ppt.Frame.Util (showLayoutData) where
 import Ppt.Frame.Layout
 import Ppt.Frame.ParsedRep
 import Ppt.Frame.Parser
@@ -76,6 +76,17 @@ evalLayout lmem =
                                                 else  (" > BAD(" ++ show result ++ ") "))
   in prefix ++ show lmem
 
+layoutData :: String -> [LayoutMember] -> IO ()
+layoutData n elems = do
+      let paddingSz' (LKPadding n) = n
+          paddingSz' _ = 0
+          paddingSz mem = paddingSz' $ lKind mem
+      putStrLn $ " -- " ++ n ++ " -- "
+      putStrLn $ L.intercalate "\n" $ map (\s -> (show $paddingSz s) ++ evalLayout s) elems
+      putStrLn $ " Padding sum: " ++ (show $ sum $ map paddingSz elems) ++ ", alignment: " ++ (
+        show $ maximum $ map lSize elems)
+
+
 showLayout :: [Frame] -> IO ()
 showLayout frames = do
   let result = compileFrames' x64 frames
@@ -85,11 +96,18 @@ showLayout frames = do
       let paddingSz' (LKPadding n) = n
           paddingSz' _ = 0
           paddingSz mem = paddingSz' $ lKind mem
-      mapM_ (\(FLayout n _ elems) -> do
-                putStrLn $ " -- " ++ n ++ " -- "
-                putStrLn $ L.intercalate "\n" $ map (\s -> (show $paddingSz s) ++ evalLayout s) elems
-                putStrLn $ " Padding sum: " ++ (show $ sum $ map paddingSz elems) ++ ", alignment: " ++ (
-                  show $ maximum $ map lSize elems)
-            ) flayouts
+      mapM_ (\(FLayout n _ elems) -> layoutData n elems) flayouts
       return ()
+
+showFrameLayouts :: [FrameLayout] -> IO ()
+showFrameLayouts layouts =
+  mapM_ (\(FLayout n _ elems) -> layoutData n elems) layouts
+
+showLayoutData :: JsonRep -> IO ()
+showLayoutData j = do
+  putStrLn "Frame Layouts"
+  showFrameLayouts (jsBufferFrames j)
+  putStrLn "\nUnderlying Frames"
+  showLayout (map flFrame $ jsBufferFrames j)
+  return ()
 
