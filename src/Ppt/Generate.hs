@@ -161,7 +161,7 @@ generateCommand args =
               return ()
             Right (PR.Buffer emitopts frames) -> do
               let partialOpts = normalize $ concat opts
-                  layout = L.compileFrames x64Layout emitopts frames
+                  layout = L.compileFrames' x64Layout frames
               case layout of
                 Left s -> putStrLn ("Error in compilation: " ++ s)
                 Right layouts -> do

@@ -89,8 +89,11 @@ data FrameCalculation = FValue FrameMember
                       | FSeriesOp FSeriesOperation FrameCalculation
                       deriving (Generic, Eq, Show)
 
--- |Note that we allow calculations to occur on differentials this
--- way, which is a powerful part of the language.
+-- |A higher level component of a semantic Frame.  FrameElements
+-- contain literal members of the data type (FMemberElem), and
+-- calculated values (FCalculatedElems).  Note that we allow
+-- calculations to occur on differentials this way, which is a
+-- powerful part of the language.
 data FrameElement = FMemberElem FrameMember
                     -- ^Saved at runtime.
                   | FCalculatedElem { fcResultType :: Primitive

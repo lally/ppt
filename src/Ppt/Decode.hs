@@ -72,10 +72,7 @@ type MaybeIO = MaybeT IO
 
 frMemName :: LayoutMember -> String
 frMemName fl = case (lKind fl) of
-    (LKMember frel _) ->
-      case frel of
-        (FMemberElem (FMember _ nm _)) -> nm
-        (FCalculatedElem _ _ nm _ _) -> nm
+    (LKMember (FMember _ nm _) _) -> nm
     _ -> undefined
 
 readMember :: [LayoutMember] -> FrameLayout -> (V.Vector Word8, TargetInfo, Int) -> MaybeIO ( [FrameElementValue])
@@ -88,7 +85,7 @@ readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
         return $ Just value
       rest <- readMember lmems layout v
       MaybeT $ return $ (:) <$> (pure $ FESeqno primValue) <*> (pure rest)
-    (LKMember (FMemberElem elem) _) -> do
+    (LKMember elem _) -> do
       let lIxOf mem = startOffset + (lOffset mem)
           mrequire :: Show a => Bool -> a -> MaybeIO a
           mrequire True a = MaybeT $ return $ Just a
