@@ -75,21 +75,23 @@ stat_pfx = "_ppt_stat_"
 json_pfx = "_ppt_json_"
 
 
--- Params: (1) address of first element in shared memory array
+-- Params: (1) verbosity level.  0 = quiet.
+--         (1) address of first element in shared memory array
 --         (2) element to start at
 --         (3) starting sequence number
 --         (3) Number of elements in that array
 --         (4) Size (in 4-byte words) of that each element
 --         (5) Destination Vector.  Mutable.  Must be at least as big as shared memory block.
 -- Returns (number copied, last index consumed, last_seqno)
-readBuffer :: Ptr Int -> Int -> Word32 -> Int -> Int -> VM.IOVector C.CUInt -> IO (Int, Int, Word32)
-readBuffer src start seqno bufelems elem_sz_in_words destvector =
+readBuffer :: Int -> Ptr Int -> Int -> Word32 -> Int -> Int -> VM.IOVector C.CUInt -> IO (Int, Int, Word32)
+readBuffer verbosity src start seqno bufelems elem_sz_in_words destvector =
   do  args <- VM.new 2
       let c_elem_sz_in_words = fromIntegral elem_sz_in_words
           c_bufelems = fromIntegral bufelems
           c_start = fromIntegral start
           c_seqno = fromIntegral seqno
           c_src = castPtr src
+          c_verb = fromIntegral verbosity
       cnt <- [C.block| int {
                    const int elem_sz = $(uint32_t c_elem_sz_in_words);
                    const int nr_elems = $(uint32_t c_bufelems);
@@ -98,19 +100,24 @@ readBuffer src start seqno bufelems elem_sz_in_words destvector =
                    const uint32_t *cur = &start[elem_sz * $(uint32_t c_start)];
                    const uint32_t shm_sz = (end - start) / elem_sz;
                    const uint32_t start_seqno = $(uint32_t c_seqno);
+                   const int verb = $(int c_verb);
                    uint32_t seq_floor;
                    uint32_t *dest = $vec-ptr:(unsigned int* destvector);
                    uint32_t last_cur_seqno = start_seqno, stride = 0;
-                   printf("last_cur_seqno set to %u, first seqno is %u\n", last_cur_seqno, *cur);
-                   printf("start address: 0x%8p, cursor (%4d) address: %8p\n",
-                          start, $(uint32_t c_start), cur);
-                   for (const uint32_t *s = start; s != end; s += elem_sz) {
-                      if (s == cur)
-                         printf("[%5d]\t", *s);
-                      else
-                         printf("%7d\t", *s);
+                   if (verb > 0) {
+                       printf("last_cur_seqno set to %u, first seqno is %u\n", last_cur_seqno, *cur);
+                       printf("start address: 0x%8p, cursor (%4d) address: %8p\n",
+                              start, $(uint32_t c_start), cur);
+                       if (verb > 1) {
+                           for (const uint32_t *s = start; s != end; s += elem_sz) {
+                              if (s == cur)
+                                 printf("[%5d]\t", *s);
+                              else
+                                 printf("%7d\t", *s);
+                           }
+                           printf("\n");
+                       }
                    }
-                   printf("\n");
                    uint32_t count = 0;
 
                    if (nr_elems >= start_seqno) {
@@ -133,17 +140,21 @@ readBuffer src start seqno bufelems elem_sz_in_words destvector =
                      }
                      if (cur == end) {
                         memcpy(dest, cur - (stride * elem_sz), stride * elem_sz * sizeof(uint32_t));
-                        printf("[mid] saved %u items\n", stride);
+                        if (verb > 0) {
+                            printf("[mid] saved %u items\n", stride);
+                        }
                         dest += stride * elem_sz;
                         cur = start;
                         stride = 0;
                      }
                    }
                    memcpy(dest, cur - (stride * elem_sz), stride * elem_sz * sizeof(uint32_t));
-                   printf("[end] saved %u items\n", stride);
                    $vec-ptr:(uint32_t * args)[0] = last_cur_seqno;
                    $vec-ptr:(uint32_t * args)[1] = (cur - start) / elem_sz;
-                   printf("[end] last_cur_seqno = %d.  cursor=%ld\n", last_cur_seqno, (cur - start) / elem_sz);
+                   if (verb > 0) {
+                       printf("[end] saved %u items\n", stride);
+                       printf("[end] last_cur_seqno = %d.  cursor=%ld\n", last_cur_seqno, (cur - start) / elem_sz);
+                   }
                    return count;
                    } |]
       last_seqno <- VM.read args 0
@@ -162,8 +173,9 @@ listBuffers pid = do
       buffers = map (drop (L.length hmem_pfx)) hmem_syms
   return buffers
 
-attachAndRun :: Int -> String -> (IntPtr -> JsonRep -> Int -> IO ()) -> IO ()
-attachAndRun pid bufferName runFn = do
+attachAndRun :: Int -> String -> (Int -> IntPtr -> JsonRep -> Int -> IO ()) -> Int ->  IO ()
+attachAndRun pid bufferName runFn verbosity = do
+  let verbStrLn s = if verbosity > 0 then putStrLn s else return ()
   process <- loadProcess pid
   let ctrlStructSz = [C.pure| int{ sizeof(struct ppt_control) } |]
       statSyms = symbolsWithPrefix process (stat_pfx ++ bufferName)
@@ -197,9 +209,11 @@ attachAndRun pid bufferName runFn = do
   -- and try to attach it.
   shmId <- throwErrnoIfMinus1 "Failed to allocate shared memory" (
     [C.exp| int {shmget(IPC_PRIVATE, $(size_t totalBufferSize), IPC_CREAT | IPC_EXCL | 0600)} |])
-  putStrLn $ "Got shared memory handle " ++ show shmId
-  putStrLn $ "  Element size is " ++ show (frameSize json)
-  showLayoutData json
+  verbStrLn $ "Got shared memory handle " ++ show shmId
+  verbStrLn $ "  Element size is " ++ show (frameSize json)
+  if verbosity > 2
+    then showLayoutData json
+    else return ()
   let cleanup pid shmId = do
           moldHandle <- swapIntegerInProcess pid hmem_sym (fromIntegral shmId) 0
           checkErrors [
@@ -241,8 +255,8 @@ attachAndRun pid bufferName runFn = do
       let (Just oldHandle) = moldHandle
       in check ("Got back old memory handle " ++ show oldHandle) $ (fromIntegral oldHandle) == shmId
       ]
-    putStrLn "Shared memory attached."
-    runFn (fromIntegral shmAddr) json numElementsInBuffer
+    verbStrLn "Shared memory attached."
+    runFn verbosity (fromIntegral shmAddr) json numElementsInBuffer
     cleanup pid shmId
-  putStrLn "Done."
+  verbStrLn "Done."
 

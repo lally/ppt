@@ -23,7 +23,6 @@ import qualified Data.List as L
 import qualified Data.HashMap.Strict as HM
 import qualified Text.PrettyPrint as PP
 import qualified Ppt.Generate.Cp as CP
---import Scratch
 
 import System.Console.GetOpt
 
@@ -112,24 +111,7 @@ normalize ((GOTag k v):ss) = (P.OptTags [PR.Tag k v]):normalize ss
 normalize ((GOOption p):ss) = p:normalize ss
 normalize [] = []
 
-{-
-mergeOptions :: PR.EmitOptions -> [GenerateOption] -> PR.EmitOptions
-mergeOptions base [] = base
-mergeOptions base (GOFilePrefix s:args) =
-  let pred (PR.EFilePrefix _) = True
-      pred _ = False
-      filtered = filter (not . pred) $ PR.eOptions base
-  in mergeOptions (base { PR.eOptions = (PR.EFilePrefix s):filtered }) args
-  
-mergeOptions base ((GOTag k v):args) =
-  let tagset = HM.insert k v $ HM.fromList $ map (\(PR.Tag k v) -> (k,v)) $ PR.eTags base
-      tags = map (\(k, v) -> PR.Tag k v) $ HM.toList tagset
-  in mergeOptions (base { PR.eTags = tags }) args
-mergeOptions base ((GOOption popt):args) = base
--}
-
 x64Layout = L.TargetInfo 8 4 4 16 8 4
-
 
 -- Yup, hideous, needs help.
 generateCommand :: [String] -> IO ()
@@ -153,7 +135,7 @@ generateCommand args =
           let optStr = show $ concat theopts
           -- process options here -- already parsed.  Load the file
           -- and change the EmitOptions appropriately.
-          putStrLn optStr
+          -- putStrLn optStr
           result <- P.parseFile fname (normalize $ concat theopts)
           case result of
             Left err -> do

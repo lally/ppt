@@ -43,6 +43,7 @@ data Flag = Pid { _pid :: Int }
           | BufferName { _bufName :: String }
           | ListBuffers { _listBuffersDummy :: Int }
           | ShowHelp { _showHelpDummy :: Int }
+          | Verbose { _verbLevel :: Int }
           | Remainder { _remain :: String }
           deriving (Eq, Show)
 makeLenses ''Flag
@@ -64,13 +65,16 @@ arglist = [GO.Option ['p'] ["pid"] (GO.ReqArg (\t -> Pid (read t)) "pid")
           , GO.Option ['t'] ["time-offset"] (GO.ReqArg (\t -> TimeOffset (read t)) "delta-hours")
             "Apply this change to the timestamps on this machine."
           , GO.Option ['o'] ["output-file"] (GO.ReqArg (\t -> Filename t) "output-file")
-            "Output file to save buffer contents. (required)"]
+            "Output file to save buffer contents. (required)"
+          , GO.Option ['v'] ["verbose"] (GO.NoArg (Verbose 0))
+            "Verbose output."]
 
 data Execution = Exec { ePid        :: Int
                       , eFilename   :: String
                       , eDesc       :: String
                       , eTimeOff    :: Double
                       , eBufferName :: String
+                      , eVerbose    :: Int
                       }
                | ExecBuffers { ePid :: Int }
                | ExecShowHelp
@@ -83,6 +87,11 @@ tryLens fn list =
   in case results of
     (x:_) -> Just x
     [] -> Nothing
+
+countLens :: (a -> Maybe b) -> [a] -> Int
+countLens fn list =
+  let results = catMaybes $ map fn list
+  in L.length results
 
 theDesc :: [Flag] -> IO String
 theDesc [] = return ""
@@ -97,6 +106,7 @@ combine desc flags =
      timeoffset = tryLens (preview timeOffset) flags
      bufname = tryLens (preview bufName) flags
      remainders = catMaybes $ map (preview remain) flags
+     verbosity = countLens (preview verbLevel) flags
      tryTake :: Read a => Maybe a -> State [String] (Maybe a)
      tryTake (Just s) = return $ Just s
      tryTake Nothing = do
@@ -123,7 +133,8 @@ combine desc flags =
        _bufname <- tryTake bufname
        _filename <- tryTake filename
        _timeOff <- takeDefault timeoffset 0.0
-       return $ Exec <$> _pid <*> _filename <*> (pure desc) <*> (pure _timeOff) <*> _bufname
+       return $ Exec <$> _pid <*> _filename <*> (pure desc) <*> (pure _timeOff) <*> _bufname <*> (
+         pure verbosity)
  in result
 
 parseArgs :: [String] -> IO (Execution)
@@ -153,8 +164,8 @@ saveFile name header = do
   hFlush h
   return h
 
-writeBufferToFile :: (Storable a, Show a, Integral a, FiniteBits a) => Handle -> VM.IOVector a -> Int -> Int -> IO ()
-writeBufferToFile h vec startIndex nelements = do
+writeBufferToFile :: (Storable a, Show a, Integral a, FiniteBits a) => Handle -> VM.IOVector a -> Int -> Int -> Int -> IO ()
+writeBufferToFile h vec startIndex nelements verb = do
   let hexList [] = []
       hexList xs = (L.concatMap hex thisWord) ++ (' ':(hexList rest))
         where hex n = (L.take (countLeadingZeros n `div` 4) $ L.repeat '0') ++ (showHex n " ")
@@ -172,40 +183,46 @@ writeBufferToFile h vec startIndex nelements = do
                   | otherwise = do val <- peek s
                                    rest <- toList (plusPtr s sz) e sz
                                    return (val:rest)
-
-            putStrLn $ "calling hPutBuf with p=" ++ (show p) ++ " start=" ++ (show start) ++ "  size=" ++ (
-              show $ size * nelements) ++ " and startIndex=" ++ show startIndex
             valList <- toList start end size -- :: (Storable a, Integral a) => IO ([a])
-            hPutBuf h start nelements
+            if verb > 0
+              then do putStrLn $ "calling hPutBuf with p=" ++ (show p) ++ " start=" ++ (show start) ++ "  size=" ++ (
+                        show $ size * nelements) ++ " and startIndex=" ++ show startIndex
+                      if verb > 1
+                        then hPutBuf h start nelements
+                        else return ()
+              else return ()
             return valList
   lst <- VM.unsafeWith vec readFn
-  putStrLn $ hexList lst
+  if verb > 1
+    then putStrLn $ hexList lst
+    else return ()
 
 
 -- Actual command implementations of Agent-mode commands (attach)
-processBufferValues :: String -> Double -> String -> IntPtr -> JsonRep -> Int -> IO ()
-processBufferValues desc timeOffset fileName shmPtr json bufElems = do
+processBufferValues :: String -> Double -> String -> Int -> IntPtr -> JsonRep -> Int -> IO ()
+processBufferValues desc timeOffset fileName verbose shmPtr json bufElems = do
   let (Just elemSize) = frameSize json
       elemSizeInWords = elemSize `div` 4
       destIntPtr = ((roundUp 392 elemSize) + fromIntegral shmPtr)
       destP = intPtrToPtr $ fromIntegral destIntPtr
+      verbPutLn s = if verbose > 0 then putStrLn s else return ()
       execLoop file cursor seqno saveBuffer = do
-            (count', cursor', seqno') <- readBuffer destP cursor seqno bufElems elemSizeInWords saveBuffer
-            putStrLn $ ">> (Raw) Count: " ++ show count' ++ ", Cursor: " ++ show cursor' ++ ", seqno: " ++ show seqno'
-            putStrLn $ ">> bufElems: " ++ show bufElems
-            putStrLn $ ">> shmPtr: " ++ (showHex shmPtr ", destIntPtr: ") ++ (showHex  destIntPtr "")
-            putStrLn $ ">> that's an offset of " ++ show (destIntPtr - fromIntegral shmPtr)
-            putStrLn $ ">> Size of an object: " ++ (show elemSize) ++ ", " ++ (show elemSizeInWords) ++ " words."
+            (count', cursor', seqno') <- readBuffer verbose destP cursor seqno bufElems elemSizeInWords saveBuffer
+            verbPutLn $ ">> (Raw) Count: " ++ show count' ++ ", Cursor: " ++ show cursor' ++ ", seqno: " ++ show seqno'
+            verbPutLn $ ">> bufElems: " ++ show bufElems
+            verbPutLn $ ">> shmPtr: " ++ (showHex shmPtr ", destIntPtr: ") ++ (showHex  destIntPtr "")
+            verbPutLn $ ">> that's an offset of " ++ show (destIntPtr - fromIntegral shmPtr)
+            verbPutLn $ ">> Size of an object: " ++ (show elemSize) ++ ", " ++ (show elemSizeInWords) ++ " words."
             let count = min bufElems (max count' 0)
             if (count > 0)
-            then writeBufferToFile file saveBuffer 0 (count * elemSize)
+            then writeBufferToFile file saveBuffer 0 (count * elemSize) verbose
             else return ()
             -- TODO: make this dynamic timing based on count vs bufsize.
             hFlush file -- TODO: only do this occasionally.
             threadDelay 250000
             execLoop file cursor' seqno' saveBuffer
       flushHandler :: Handle -> AsyncException -> IO ()
-      flushHandler file UserInterrupt = do putStrLn ">> Closing file"
+      flushHandler file UserInterrupt = do verbPutLn ">> Closing file"
                                            hClose file
       flushHandler _ ex = do self <- myThreadId
                              throwTo self ex
@@ -218,11 +235,11 @@ processBufferValues desc timeOffset fileName shmPtr json bufElems = do
 attach :: [String] -> IO ()
 attach args = do
   command <- parseArgs args
-  putStrLn $ "got args: " ++ show args
-  putStrLn $ " read as : " ++ show command
+--  putStrLn $ "got args: " ++ show args
+--  putStrLn $ " read as : " ++ show command
   case command of
-    Exec pid fname desc toff bufname ->
-      attachAndRun pid bufname (processBufferValues desc toff fname)
+    Exec pid fname desc toff bufname verbosity ->
+      attachAndRun pid bufname (processBufferValues desc toff fname) verbosity
     ExecBuffers pid -> do
       buffers <- listBuffers pid
       putStrLn $ "Buffers: " ++ L.intercalate ", " buffers
