@@ -37,7 +37,9 @@ data LayoutKind = LKSeqno SeqNoSide
                 | LKMember FrameMember (Maybe (Int,Int))
                   -- ^An actual declared member.  It may be one of a
                   -- group.  (Current, Total), where Current < Total,
-                  -- always.
+                  -- always.  For counters, we have some number of
+                  -- them (3) that get generated for each 'counter'
+                  -- member.  Interval counters get twice as many.
                  | LKPadding Int
                    -- ^Padding between members, or at end.  Param is
                    -- number of bytes
@@ -128,7 +130,6 @@ serializeOffsets target inmems =
 
 -}
 
-
 -- |Intermediate type during layout.  We separate out the raw
 -- FrameMembers that take up space in the buffer, and calculate the
 -- alignment and paddings.
@@ -149,12 +150,14 @@ data FrameMemberBlock = FMBlock { _frInternalElements :: [LayoutMember]
                                 } deriving (Eq)
 
 instance Show FrameMemberBlock where
-  show fmb = ("FMBlock " ++ (_frName fmb) ++ " align " ++ (show $ _frAlign fmb) ++ "  elems = [\n\t" ++ (
+  show fmb = ("FMBlock " ++ (_frName fmb) ++ " align " ++ (
+                 show $ _frAlign fmb) ++ "  elems = [\n\t" ++ (
     L.intercalate "\n\t" $ map showLMem (_frInternalElements fmb)) ++ "\n]  front = [\n\t" ++ (
     L.intercalate "\n\t" $ map showLMem (_frFront fmb)) ++ "\n]  back = [\n\t" ++ (
     L.intercalate "\n\t" $ map showLMem (_frBack fmb)) ++ "\n]")
     where showLMem lmem = (lName lmem) ++ ": sz=" ++ (show $ lSize lmem) ++ ", aiign=" ++ (
-            show $ lAlignment lmem) ++ ", ty=" ++ (show $ lType lmem) ++ ", kind=" ++ (show $ lKind lmem)
+            show $ lAlignment lmem) ++ ", ty=" ++ (show $ lType lmem) ++ ", kind=" ++ (
+            show $ lKind lmem)
 
 -- Enhancement: look at sizes returned from calcBlockPadding and
 -- while (the back size > align && the front size > sizeof last FrameMember)
@@ -356,6 +359,7 @@ data FileRecord = FileRecord { frFormat    :: String
                              , frDate      :: String
                              , frComment   :: String
                              , frDeltaTime :: Int    -- in seconds
+                             , frTarget    :: TargetInfo
                              , frJson      :: JsonRep }
                   deriving (Generic, Eq, Show)
 instance ToJSON FileRecord

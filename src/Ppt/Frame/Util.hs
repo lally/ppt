@@ -9,7 +9,11 @@ import qualified Data.List as L
 import qualified Data.ByteString as BS
 import qualified Text.PrettyPrint as PP
 
-target = TargetInfo 8 4 8 16 8 1
+--target = TargetInfo 8 4 8 16 8 1
+
+-- TODO(lally): Use inline-c and sizeof-ops to get this data.  Find a
+-- place for this.
+x64    = TargetInfo 8 4 4 8 8 1
 
 opts :: EmitOptions
 opts = (EmitOptions
@@ -20,7 +24,6 @@ opts = (EmitOptions
         []
         [])
 cfg = makeOutCfg opts []
-x64 = TargetInfo 8 4 4 8 8 1
 
 bimap :: Either a b -> (a -> c) -> (b -> d) -> Either c d
 bimap (Left x) f g = Left (f x)

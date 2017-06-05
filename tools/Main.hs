@@ -1,11 +1,9 @@
 module Main where
 
 import Ppt.Configuration (RunConfig(..), cfgTarget, MachineTarget(..))
-import qualified Ppt.SIParser as Parse
 import qualified Ppt.Agent as Agent
-import qualified Ppt.StaticInstrumentation as Inst
-import qualified Ppt.Storage as S
 import qualified Ppt.Generate as Gen
+import qualified Ppt.Decode as Decode
 import System.Environment (getArgs)
 
 {- Driver program for pt
@@ -28,6 +26,7 @@ runCommand args cfg = do
     case head args of
       "generate" -> Gen.generateCommand (tail args)
       "attach" -> Agent.attach (tail args)
+      "decode" -> Decode.decodeCommand (tail args)
       "?" -> showHelp
       "help" -> showHelp
       otherwise -> showHelp

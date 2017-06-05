@@ -187,10 +187,8 @@ writeBufferToFile h vec startIndex nelements verb = do
             if verb > 0
               then do putStrLn $ "calling hPutBuf with p=" ++ (show p) ++ " start=" ++ (show start) ++ "  size=" ++ (
                         show $ size * nelements) ++ " and startIndex=" ++ show startIndex
-                      if verb > 1
-                        then hPutBuf h start nelements
-                        else return ()
               else return ()
+            hPutBuf h start nelements
             return valList
   lst <- VM.unsafeWith vec readFn
   if verb > 1
@@ -224,8 +222,9 @@ processBufferValues desc timeOffset fileName verbose shmPtr json bufElems = do
       flushHandler :: Handle -> AsyncException -> IO ()
       flushHandler file UserInterrupt = do verbPutLn ">> Closing file"
                                            hClose file
-      flushHandler _ ex = do self <- myThreadId
-                             throwTo self ex
+      flushHandler file ex = do self <- myThreadId
+                                hClose file
+                                throwTo self ex
   file <- saveFile fileName (FileRecord "1.0.0" "now" desc (round $ timeOffset * 3600.0) json)
   destBuffer <- VM.new (bufElems * elemSizeInWords)
   handle (flushHandler file) $ execLoop file 0 1 destBuffer

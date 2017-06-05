@@ -45,6 +45,7 @@ data DecodedRow = DRow { _rElements :: [FrameElement]
                        , _rValues :: [PrimitiveValue]
                        } deriving (Eq, Show)
 data DecodedFrame = DFrame { _dFrame :: Frame
+                           , _dLayout :: [LayoutMember]
                            , _dRows :: [DecodedRow]
                            } deriving (Eq, Show)
 
@@ -198,7 +199,6 @@ splitFileContents contents =
           mfileRecord = decode fileRecordBlob :: Maybe FileRecord
       in maybe Nothing (\v -> Just (v, binaryFrames)) mfileRecord
 
-
 decodeFile :: TargetInfo -> BSL.ByteString -> IO ([FrameValue])
 decodeFile tinfo contents = do
   let -- lazy = BSL.fromChunks [contents]
@@ -241,23 +241,35 @@ sortValues inputs =
   map snd $ HM.toList $ foldr updateForFV HM.empty inputs
   where
     mergeEntry :: DecodedFrame -> DecodedFrame -> DecodedFrame
-    mergeEntry (DFrame fr rows) (DFrame _ [r]) = DFrame fr (r:rows)
-    makeEntry fr seq row = DFrame fr [DRow (_frameElements fr) seq row]
+    mergeEntry dfr (DFrame _ _ []) = dfr
+    mergeEntry (DFrame fr l rows) (DFrame _ _ r) = DFrame fr l (rows ++ r)
+    makeEntry fr lmem seq row = DFrame fr lmem [DRow (_frameElements fr) seq row]
     updateForFV :: FrameValue -> HM.HashMap Frame DecodedFrame -> HM.HashMap Frame DecodedFrame
     updateForFV fv@(FValue fr vals) mp =
       let (seq, row) = decodeValue fv
-      in HM.insertWith mergeEntry fr (makeEntry fr seq row) mp
+          layoutMems = mapMaybe (\c -> case c of (FEValue _ _ m) -> Just m ; (FESeqno _) -> Nothing) vals
+      in HM.insertWith mergeEntry fr (makeEntry fr layoutMems seq row) mp
+
+showValue :: ETimeRep -> PrimitiveValue -> String
+showValue _ (PVRational d) = show d
+showValue _ (PVIntegral i) = show i
+showValue (ETimeSpec _) (PVTime a b) = show $ a * 1000000000 + b
+showValue (ETimeVal) (PVTime a b) = show $ a * 1000000 + b
 
 -- |Currently does no processing. Opens 'filename' and writes out CSVs
 -- - one per found frame type - to 'destDir'.
 decodeFileToCSVs filename destDir = do
-  let writeCsv dir (DFrame fr rows) = do
+  let writeCsv dir (DFrame fr lmem rows) = do
         let fileName = (_frameName fr) ++ ".csv"
             firstRow = head rows
             elemName (FMemberElem (FMember _ n _)) = n
             elemName (FCalculatedElem _ _ n _ _) = n
-            headers = L.intercalate ", " $ map elemName $ _rElements firstRow
-            saveRow (DRow _ n vs) = L.intercalate ", " $ (show n):(map show vs)
+            timeRep = let etr (PTime t) = Just t
+                          etr _ = Nothing
+                          elems = mapMaybe (etr . lType) lmem
+                      in if length elems > 0 then head elems else ETimeVal
+            headers = "ppt_seqno, " ++( L.intercalate ", " $ map lName lmem)
+            saveRow (DRow _ n vs) = L.intercalate ", " $ (show n):(map (showValue timeRep) vs)
         h <- openFile (destDir ++ "/" ++ fileName) WriteMode
         hPutStrLn h headers
         mapM_ (\r -> hPutStrLn h $ saveRow r) rows
@@ -270,3 +282,16 @@ decodeFileToCSVs filename destDir = do
   let csvs = sortValues values
   mapM_ (writeCsv destDir) csvs
   return $ map (_frameName . _dFrame) csvs
+
+decodeCommand :: [String] -> IO ()
+decodeCommand [] = do
+  putStrLn "usage: ppt decode input_filename [output-dir]"
+  putStrLn "  where output-dir will be generated if unpsecified."
+
+decodeCommand (filename:rest) = do
+  let outputDir = if length rest < 1
+                    then filename ++ "_output"
+                    else head rest
+  result <- decodeFileToCSVs filename outputDir
+  putStrLn $ "Decoded " ++ (L.intercalate ", " result ) ++ " into " ++ outputDir
+  return ()

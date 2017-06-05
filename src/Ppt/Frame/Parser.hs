@@ -10,8 +10,9 @@ import Data.ByteString.Lazy.Char8             (pack, unpack)
 import Data.List
 import Data.Maybe                             (catMaybes, mapMaybe)
 import Ppt.Frame.ParsedRep
-import Text.ParserCombinators.Parsec          (GenParser, ParseError, alphaNum, char, digit, eof, many, many1,
-                                               noneOf, sepBy1, string, try, (<?>), (<|>))
+import Text.ParserCombinators.Parsec          (GenParser, ParseError, alphaNum, char,
+                                               digit, eof, many, many1, noneOf, sepBy1,
+                                               string, try, (<?>), (<|>))
 import Text.ParserCombinators.Parsec.Language (javaStyle)
 import Text.ParserCombinators.Parsec.Prim     (parse)
 
@@ -162,8 +163,8 @@ data PartialOption = OptLang { _lang :: ELanguage }
                    | OptTime { _time :: ETimeRep }
                    | OptRuntime { _runtime :: ERuntime }
                    | OptTags { _tags :: [ETag] }
-
                    deriving (Eq, Show)
+
 makeLenses ''PartialOption
 
 optionParser :: Parser PartialOption
@@ -183,14 +184,6 @@ optionParser = (do { resvd "time"
                        ; return (OptTags [tag]) })
                <?> "option type: time, runtime, tag"
 
-{-
-defaultEmit = EmitOptions { eBuffer = (EBuffer "unlisted" Nothing)
-                          , eLanguage = ELangCpp
-                          , eTimeRep = (ETimeSpec ETimeClockMonotonic)
-                          , eRuntime = (ERuntime False)
-                          , eTags = []
-                          , eOptions = []}
--}
 min1 :: [a] -> String -> Either String a
 min1 (x:_)  _ = Right x
 min1 [] name = Left (name ++ " required")
@@ -233,13 +226,6 @@ optionUpdate base opts =
         in maybe (view outl outs) id override
       concatenate inpl outl ins outs =
         catMaybes [preview outl outs, preview inpl ins]
---      replace :: Getting a b -> Getting u v c d -> s -> u -> s
---      replace inpl outl oss bs =
---        let last = mLast $ catMaybes $ map (preview inpl) oss
---        in maybe (view oss bs) id last
-    -- map preview to oss, then get last Just.
---    let last = {- needs maybe -} CL.lastOf $ concatMap (preview inpl) oss
---    maybe (view outl bs) id (preview inpl os)
       updateTags ins outs =
         let decompose (Tag k v) = (k, v)
             compose (k, v) = Tag k v
@@ -250,10 +236,6 @@ optionUpdate base opts =
             combined = foldl (\hm (k, v) -> HM.insert k v hm) origTags newTags
         in map compose $ HM.toList combined
 
---    let untag (Tag k v) = (k, v)
---        orig = HM.fromList $ map untag (view outl bs)
---        new = HM.fromList $ map untag $ concatMap
---    in HM.union  new orig
       langs = catMaybes $ map (preview lang) opts
       lang_ = replace lang eLanguage opts base
       buffers = catMaybes $ map (preview buffer) opts
@@ -296,7 +278,6 @@ fileParser opts = do { ws
                      ; let eopts = optionUpdate head opts
                      ; frames <- many (frame eopts)
                      ; return (Buffer head frames) }
---                   finalEmitOptions = (
 
 parseFile :: String -> [PartialOption] -> IO (Either String Buffer)
 parseFile fname opts = do  {
