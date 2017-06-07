@@ -44,14 +44,14 @@ instance Random Primitive where
         intify PFloat = 1
         intify PInt = 2
         intify (PTime _) = 3
-        intify PCounter = 4
+        intify (PCounter _) = 4
         intify PByte = 5
         primify 0 = (\g -> (PDouble, g))
         primify 1 = (\g -> (PFloat, g))
         primify 2 = (\g -> (PInt, g))
         primify 3 = (\g -> let (tr, g')= random g -- :: RandomGen a => (ETimeRep, a)
                             in (PTime tr, g'))
-        primify 4 = (\g -> (PCounter, g))
+        primify 4 = (\g -> (PCounter Nothing, g))
         primify 5 = (\g -> (PByte, g))
         start_v = intify s
         end_v = intify e

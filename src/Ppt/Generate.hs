@@ -26,7 +26,6 @@ import qualified Ppt.Generate.Cp as CP
 
 import System.Console.GetOpt
 
-
 generateC :: Inst.FullSpecification -> String
 generateC inst = show inst
 

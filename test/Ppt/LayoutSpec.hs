@@ -4,7 +4,7 @@ import Test.Hspec
 import Test.QuickCheck
 import Ppt.Frame.Layout
 import Ppt.Frame.ParsedRep
-import Ppt.Generate
+import Ppt.Generate.Cp
 import Ppt.ParserGen
 
 -- `main` is here so that this module can be run from GHCi on its own.  It is
