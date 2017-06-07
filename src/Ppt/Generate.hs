@@ -111,8 +111,6 @@ normalize ((GOTag k v):ss) = (P.OptTags [PR.Tag k v]):normalize ss
 normalize ((GOOption p):ss) = p:normalize ss
 normalize [] = []
 
-x64Layout = L.TargetInfo 8 4 4 16 8 4
-
 -- Yup, hideous, needs help.
 generateCommand :: [String] -> IO ()
 generateCommand args =
@@ -143,7 +141,7 @@ generateCommand args =
               return ()
             Right (PR.Buffer emitopts frames) -> do
               let partialOpts = normalize $ concat opts
-                  layout = L.compileFrames' x64Layout frames
+                  layout = L.compileFrames' CP.x64Layout frames
               case layout of
                 Left s -> putStrLn ("Error in compilation: " ++ s)
                 Right layouts -> do

@@ -48,7 +48,7 @@ primType o = ( resvd "double" >> return PDouble )
              <|> ( resvd "int" >> return PInt )
              <|> ( resvd "float" >> return PFloat )
              <|> ( resvd "time" >> return (PTime (_eTimeRep o)))
-             <|> ( resvd "counter" >> return PCounter )
+             <|> ( resvd "counter" >> return (PCounter Nothing))
              <?> "type name"
 -- TODO: replace primType here with a higher-level production that
 -- also takes interval and other keywords.  They form a list of

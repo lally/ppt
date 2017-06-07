@@ -106,7 +106,9 @@ readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
                                      return $ Just $ PVTime (fromIntegral high) (fromIntegral low)
          PTime ETimeVal-> do high <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
                              return $ Just $ PVTime (fromIntegral high) 0
-         PCounter -> return $ Just $ PVCounter [] PCNone
+         -- TODO(lally): Add decode support for these counters.
+         PCounter (Just n) -> do val <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
+                                 return $ Just $ PVCounter val n (PIntelCounter "" "" "")
          PByte -> return Nothing -- $ Just $ PVIntegral 0
       let thisResult = FEValue <$> (pure primValue) <*> (findMember (frMemName lmem) layout) <*> pure lmem
       rest <- readMember lmems layout v
@@ -199,8 +201,8 @@ splitFileContents contents =
           mfileRecord = decode fileRecordBlob :: Maybe FileRecord
       in maybe Nothing (\v -> Just (v, binaryFrames)) mfileRecord
 
-decodeFile :: TargetInfo -> BSL.ByteString -> IO ([FrameValue])
-decodeFile tinfo contents = do
+decodeFile :: {-TargetInfo -> -}BSL.ByteString -> IO ([FrameValue])
+decodeFile {-tinfo-} contents = do
   let -- lazy = BSL.fromChunks [contents]
       length = DBG.runGet deserialiseHeader contents
       header = splitFileContents contents
@@ -214,17 +216,17 @@ decodeFile tinfo contents = do
       -- (3) the binary frames
       putStrLn $ "Got remaining " ++ (show $ BSL.length binaryFrames) ++ " for file after header."
       putStrLn $ "That should be " ++ (show $ ((fromIntegral $ BSL.length binaryFrames) / 4.0)) ++ " Ints."
-      decodeFromBytes tinfo (frJson fileRecord) binaryFrames
+      decodeFromBytes (jsTarget $ frJson fileRecord) (frJson fileRecord) binaryFrames
 
 -- We do a terrible job about supporting multiple platforms.  These
 -- values don't indicate the actual sizes of some important stuff,
 -- like time values or counters.
-x64 = TargetInfo 8 4 4 8 8 1
+--x64 = TargetInfo 8 4 4 8 8 1
 
 decodeFileToConsole :: String -> Int -> IO ()
 decodeFileToConsole filename maxNr = do
   contents <- BSL.readFile filename
-  values <- decodeFile x64 contents
+  values <- decodeFile contents
   putStrLn $ ">> " ++ (L.intercalate "\n>> " $ map descValue $ take maxNr values)
 
 -- Always returns the sequence number *first*.  Also assumes its first.
@@ -277,7 +279,7 @@ decodeFileToCSVs filename destDir = do
   -- This will fail quickly if we can't create the directory.
   createDirectory destDir
   contents <- BSL.readFile filename
-  values <- decodeFile x64 contents
+  values <- decodeFile {-x64-} contents
 --  let csvs = F.foldl' (\hm fv -> HM.insertWith (++) (_frameName $ _frame fv) [fv] hm) HM.empty values
   let csvs = sortValues values
   mapM_ (writeCsv destDir) csvs

@@ -225,7 +225,9 @@ processBufferValues desc timeOffset fileName verbose shmPtr json bufElems = do
       flushHandler file ex = do self <- myThreadId
                                 hClose file
                                 throwTo self ex
-  file <- saveFile fileName (FileRecord "1.0.0" "now" desc (round $ timeOffset * 3600.0) json)
+  -- TODO(lally): save counters used here.
+  -- TODO(lally): put the TargetInfo into JsonRep instead of the FileRecord.
+  file <- saveFile fileName (FileRecord "1.0.0" "now" desc (round $ timeOffset * 3600.0) [] json)
   destBuffer <- VM.new (bufElems * elemSizeInWords)
   handle (flushHandler file) $ execLoop file 0 1 destBuffer
   return ()
@@ -234,8 +236,6 @@ processBufferValues desc timeOffset fileName verbose shmPtr json bufElems = do
 attach :: [String] -> IO ()
 attach args = do
   command <- parseArgs args
---  putStrLn $ "got args: " ++ show args
---  putStrLn $ " read as : " ++ show command
   case command of
     Exec pid fname desc toff bufname verbosity ->
       attachAndRun pid bufname (processBufferValues desc toff fname) verbosity

@@ -25,16 +25,15 @@ data TargetInfo = TargetInfo { tDouble :: Int
                                -- instructions.
                              } deriving (Generic, Eq, Show)
 
-timeSize tinfo ETimeVal = tTime tinfo
-timeSize tinfo (ETimeSpec _) = 2 * tTime tinfo
-
 -- |Machine Layout
 data SeqNoSide = FrontSeq | BackSeq deriving (Generic, Eq, Show)
+data IntervalSide = IntBegin Int Int -- ^Begin of Num of Num
+                  | IntEnd Int Int deriving (Generic, Eq, Show)
 data LayoutKind = LKSeqno SeqNoSide
                   -- ^Sequence numbers.  Front and back
                 | LKTypeDescrim Int
                   -- ^Number of elements to discriminate by.
-                | LKMember FrameMember (Maybe (Int,Int))
+                | LKMember FrameMember (Maybe IntervalSide)
                   -- ^An actual declared member.  It may be one of a
                   -- group.  (Current, Total), where Current < Total,
                   -- always.  For counters, we have some number of
@@ -66,6 +65,7 @@ data FrameLayout = FLayout { flName :: String
 
 data JsonRep = JsonRep { jsAbi :: String
                        , jsBufferEmit :: EmitOptions
+                       , jsTarget :: TargetInfo
                        , jsBufferFrames :: [FrameLayout]
                        , jsTags :: [(String, String)]
                        , jsMetadata :: [String]
@@ -83,16 +83,16 @@ sizeOf :: TargetInfo -> Primitive -> Int
 sizeOf info PDouble = tDouble info
 sizeOf info PFloat = tFloat info
 sizeOf info PInt = tInt info
-sizeOf info (PTime rep) = tTime info --timeSize info rep
-sizeOf info PCounter = tCounter info
+sizeOf info (PTime _) = tTime info
+sizeOf info (PCounter _) = tCounter info
 sizeOf info PByte = 1
 
 alignOf :: TargetInfo -> Primitive -> Int
 alignOf info PDouble = tDouble info
 alignOf info PFloat = tFloat info
 alignOf info PInt = tInt info
-alignOf info (PTime rep) = tCounter info
-alignOf info PCounter = tCounter info
+alignOf info (PTime _) = tCounter info
+alignOf info (PCounter _)= tCounter info
 alignOf info PByte = 1
 
 alignRemainder :: Int -> Int -> Int
@@ -247,10 +247,20 @@ moduloFit align frontEnd backEnd internals =
 
 layoutMember :: TargetInfo -> FrameMember -> [LayoutMember]
 layoutMember tinfo fr@(FMember ty nm True) =
-  [LMember ty 0 algn sz (LKMember fr (Just (0,2))) (nm ++ "_start"),
-   LMember ty 0 algn sz (LKMember fr (Just (1,2))) (nm ++ "_end")]
+  case ty of
+    (PCounter n) ->
+      if n /= Nothing
+      then fail "Got allocated PCounter during layout"
+      else -- replicate this.
+        concatMap (\i -> makePair (PCounter (Just i)) i 3) [0..2]
+    _ -> makePair ty 0 1
   where sz = sizeOf tinfo ty
         algn = alignOf tinfo ty
+        makePair t a b = [
+          LMember t 0 algn sz (LKMember fr (Just (IntBegin a b))) (nm ++ pfx ++ "_start"),
+          LMember t 0 algn sz (LKMember fr (Just (IntEnd a b))) (nm ++ pfx ++ "_end")]
+          where pfx = if b > 1 then show a else ""
+
 layoutMember tinfo fr@(FMember ty nm False) =
   [LMember ty 0 algn sz (LKMember fr Nothing) (nm)]
   where sz = sizeOf tinfo ty
@@ -325,12 +335,14 @@ frameSize json =
 
 -- Then get theem padded to the same size.
 instance ToJSON SeqNoSide
+instance ToJSON IntervalSide
 instance ToJSON LayoutKind
 instance ToJSON LayoutMember
 instance ToJSON FrameLayout
 instance ToJSON TargetInfo
 
 instance FromJSON SeqNoSide
+instance FromJSON IntervalSide
 instance FromJSON LayoutKind
 instance FromJSON LayoutMember
 instance FromJSON FrameLayout
@@ -342,24 +354,26 @@ instance ToJSON JsonRep where
                         map (\(k,v) -> object [ "key" .= k, "value" .= v ]) $ jsTags j)
                     , "metadata" .= jsMetadata j
                     , "emit" .= jsBufferEmit j
+                    , "target" .= jsTarget j
                     , "frames" .= jsBufferFrames j
                     ]
 
 instance FromJSON JsonRep where
-  parseJSON (Object o) = do -- withObject "_json" $ \o -> do
+  parseJSON (Object o) = do
     abi <- o .:? "abi" .!= "not found"
     emit <- o .: "emit"
     frames <- o .:? "frames" .!= []
     tags <- o .:? "tags" .!= []
     md <- o .:? "metadata" .!= []
-    return $ JsonRep abi emit frames tags md
+    tgt <- o .: "target"
+    return $ JsonRep abi emit tgt frames tags md
 
 
 data FileRecord = FileRecord { frFormat    :: String
                              , frDate      :: String
                              , frComment   :: String
                              , frDeltaTime :: Int    -- in seconds
-                             , frTarget    :: TargetInfo
+                             , frCounters  :: [String]
                              , frJson      :: JsonRep }
                   deriving (Generic, Eq, Show)
 instance ToJSON FileRecord

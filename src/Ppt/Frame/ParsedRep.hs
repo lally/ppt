@@ -5,6 +5,7 @@ module Ppt.Frame.ParsedRep where
 import GHC.Generics
 import Data.Aeson
 import Data.Hashable
+import Data.Word
 import Control.Lens hiding (element, noneOf)
 {- |Parsing, Calculation, and Layout
 
@@ -14,7 +15,7 @@ import Control.Lens hiding (element, noneOf)
 -}
 
 data PCounterConfig = PCNone
-                    | PIntelCounter Int Int Int
+                    | PIntelCounter String String String
                     deriving (Generic, Eq, Show)
 
 -- |Common to both Parsed Rep and Machine Layout.  Presumed x86_64 type sizes.
@@ -22,7 +23,8 @@ data PCounterConfig = PCNone
 data PrimitiveValue = PVRational Double
                     | PVIntegral Int
                     | PVTime Int Int
-                    | PVCounter [Int] PCounterConfig
+                    | PVCounter Word64 Int PCounterConfig
+                    -- ^Value, index, config it's filling in.
                     deriving (Generic, Eq, Show)
 
 -- |Parsed Representation
@@ -42,13 +44,18 @@ data ETimeSource = ETimeClockRealtime
 -- |gettimeofday() vs clock_gettime()
 data ETimeRep = ETimeVal | ETimeSpec ETimeSource deriving (Generic, Eq, Show)
 
-data Primitive = PDouble | PFloat | PInt | PTime ETimeRep
-               | PCounter | PByte deriving (Generic, Eq, Show)
+data Primitive = PDouble
+               | PFloat
+               | PInt
+               | PTime ETimeRep  -- ^The format stored.
+               | PCounter (Maybe Int)  -- ^The index of the counter (we store several)
+               | PByte
+               deriving (Generic, Eq, Show)
 
 
 data ERuntime = ERuntime { erMultithread :: Bool } deriving (Generic, Eq, Show)
 data ETag = Tag String String -- ^Key, Value
-            deriving (Generic, Eq, Show) 
+            deriving (Generic, Eq, Show)
 data EBuffer = EBuffer { ebName :: String, ebMinElements :: Maybe Int }
              deriving (Generic, Eq, Show)
 

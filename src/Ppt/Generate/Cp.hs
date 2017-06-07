@@ -55,6 +55,8 @@ inline void writeout(const mainloop& ml) {
 }  // namespace ppt
 -}
 
+x64Layout = TargetInfo 8 4 4 16 8 4
+
 -- |Derived from EmitOptions for whatever data we need for outputting.
 data OutputCfg = OutputCfg { timeType :: String -- ^Decltype of time vars
                            , timeHeader :: String
@@ -221,7 +223,7 @@ stmt s = PP.text s <> PP.semi
 
 makeJSON :: OutputCfg -> String
 makeJSON cfg =
-  let json = JsonRep "1.0.0" (emitOpts cfg) (frames cfg) [] []
+  let json = JsonRep "1.0.0" (emitOpts cfg) x64Layout (frames cfg) [] []
   in quoteString $ unpack $ encode json
 
 structDecl :: OutputCfg -> String -> [(String, String)] -> PP.Doc
@@ -319,7 +321,7 @@ makeMember cfg (LMember (PTime _) _ _ _ _ nm) =
              timeSave cfg nm]]
          (dataMember timety nm) timeheaders [])
 
-makeMember cfg (LMember PCounter _ _ _ k nm) =
+makeMember cfg (LMember (PCounter Nothing) _ _ _ k nm) =
   MB [] (dataMember "uint64_t" nm) [] [GMCounters]
 makeMember cfg (LMember PByte _ _ _ (LKPadding n) nm) =
   PrivateMem (dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")) ["cstdint"] []
