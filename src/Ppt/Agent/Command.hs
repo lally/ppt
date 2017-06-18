@@ -44,6 +44,7 @@ data Flag = Pid { _pid :: Int }
           | ListBuffers { _listBuffersDummy :: Int }
           | ShowHelp { _showHelpDummy :: Int }
           | Verbose { _verbLevel :: Int }
+          | Counter { _counter :: String }
           | Remainder { _remain :: String }
           deriving (Eq, Show)
 makeLenses ''Flag
@@ -66,6 +67,8 @@ arglist = [GO.Option ['p'] ["pid"] (GO.ReqArg (\t -> Pid (read t)) "pid")
             "Apply this change to the timestamps on this machine."
           , GO.Option ['o'] ["output-file"] (GO.ReqArg (\t -> Filename t) "output-file")
             "Output file to save buffer contents. (required)"
+          , GO.Option ['c'] ["counter"] (GO.ReqArg Counter "counter-name")
+            "Comma-separated list of performance counters to use"
           , GO.Option ['v'] ["verbose"] (GO.NoArg (Verbose 0))
             "Verbose output."]
 
@@ -75,6 +78,7 @@ data Execution = Exec { ePid        :: Int
                       , eTimeOff    :: Double
                       , eBufferName :: String
                       , eVerbose    :: Int
+                      , eCounters   :: [String]
                       }
                | ExecBuffers { ePid :: Int }
                | ExecShowHelp
@@ -93,6 +97,16 @@ countLens fn list =
   let results = catMaybes $ map fn list
   in L.length results
 
+breakCsv :: String -> [String]
+breakCsv s =
+ cons (case L.break (== ',') s of
+          (l, s') -> (l, case s' of
+                           []      -> []
+                           _:s''   -> breakCsv s''))
+ where
+   cons ~(h, t)        =  h : t
+
+
 theDesc :: [Flag] -> IO String
 theDesc [] = return ""
 theDesc (Desc s:_) = return s
@@ -105,6 +119,7 @@ combine desc flags =
      filename = tryLens (preview fileName) flags
      timeoffset = tryLens (preview timeOffset) flags
      bufname = tryLens (preview bufName) flags
+     counters = L.concatMap breakCsv $ catMaybes $ map (preview counter) flags
      remainders = catMaybes $ map (preview remain) flags
      verbosity = countLens (preview verbLevel) flags
      tryTake :: Read a => Maybe a -> State [String] (Maybe a)
@@ -134,7 +149,7 @@ combine desc flags =
        _filename <- tryTake filename
        _timeOff <- takeDefault timeoffset 0.0
        return $ Exec <$> _pid <*> _filename <*> (pure desc) <*> (pure _timeOff) <*> _bufname <*> (
-         pure verbosity)
+         pure verbosity) <*> (pure counters)
  in result
 
 parseArgs :: [String] -> IO (Execution)
@@ -237,8 +252,8 @@ attach :: [String] -> IO ()
 attach args = do
   command <- parseArgs args
   case command of
-    Exec pid fname desc toff bufname verbosity ->
-      attachAndRun pid bufname (processBufferValues desc toff fname) verbosity
+    Exec pid fname desc toff bufname verbosity cnt -> do
+      attachAndRun pid bufname (processBufferValues desc toff fname) verbosity cnt
     ExecBuffers pid -> do
       buffers <- listBuffers pid
       putStrLn $ "Buffers: " ++ L.intercalate ", " buffers

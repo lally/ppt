@@ -114,3 +114,13 @@ showLayoutData j = do
   showLayout (map flFrame $ jsBufferFrames j)
   return ()
 
+
+breakCsv :: String -> [String]
+breakCsv s =
+ cons (case break (== ',') s of
+          (l, s') -> (l, case s' of
+                           []      -> []
+                           _:s''   -> lines s''))
+ where
+   cons ~(h, t)        =  h : t
+   

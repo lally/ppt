@@ -27,6 +27,8 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Elf as E
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
+import qualified Foreign.C.String as FCS
+import qualified Foreign.Marshal.Alloc as FMA
 import qualified Data.Vector.Storable as V
 import qualified Data.Vector.Storable.Mutable as VM
 import qualified Language.C.Inline as C
@@ -43,6 +45,10 @@ C.include "<sys/shm.h>"
 C.include "<string.h>"
 C.include "<stdio.h>"
 C.include "<inttypes.h>"
+C.include "<linux/perf_event.h>"
+C.include "<asm/unistd.h>"
+C.include "<perfmon/pfmlib.h>"
+C.include "<perfmon/pfmlib_perf_event.h>"
 
 roundUp :: Int -> Int -> Int
 roundUp blockSz elemSz =
@@ -173,10 +179,54 @@ listBuffers pid = do
       buffers = map (drop (L.length hmem_pfx)) hmem_syms
   return buffers
 
-attachAndRun :: Int -> String -> (Int -> IntPtr -> JsonRep -> Int -> IO ()) -> Int ->  IO ()
-attachAndRun pid bufferName runFn verbosity = do
+initCounters :: IO (Bool)
+initCounters = do
+  res <- [C.exp| int{ pfm_initialize() } |]
+  return $ (fromIntegral ( [C.pure| int { $(int res) == PFM_SUCCESS }|])) /= 0
+
+loadCounter :: String -> C.CUIntPtr -> IO (Bool)
+loadCounter s p = do
+  counterName <- FCS.newCString s
+  res <- [C.block| int {
+            struct perf_event_attr* pe = (struct perf_event_attr*)$(uintptr_t p);
+            memset(pe, 0, sizeof(struct perf_event_attr));
+            pfm_perf_encode_arg_t pfm_arg = { pe, NULL, sizeof(pfm_perf_encode_arg_t), 0, 0, 0 };
+            int pfm_ret = pfm_get_os_event_encoding($(const char* counterName), PFM_PLM3, PFM_OS_PERF_EVENT_EXT, &pfm_arg);
+            if (pfm_ret != PFM_SUCCESS) {
+                printf("Failed to get perf encoding for %s (pe=%p): %s\n", $(const char* counterName), pe, pfm_strerror(pfm_ret));
+                return -1;
+            }
+            pe->disabled = 0;
+            pe->exclude_kernel = 1;
+            pe->exclude_hv = 1;
+            return 0;
+          } |]
+  FMA.free counterName
+  return $ res /= (-1)
+
+-- |As a cheapie, reverse the counter names on the way in and we'll
+-- just use the length as an index var.
+setCounters :: [String] -> C.CUIntPtr -> IO (Bool)
+setCounters [] _ = return True
+setCounters (cntr:cntrs) shmAddr = do
+  let idx = fromIntegral $ length cntrs
+  addr <- [C.block| uintptr_t {
+              struct ppt_control *ctrl = (struct ppt_control*)$(uintptr_t shmAddr);
+              return (uintptr_t) &ctrl->counterdata[$(int idx)];
+          }|]
+  res <- loadCounter cntr addr
+  if res
+    then setCounters cntrs shmAddr
+    else return False
+
+attachAndRun :: Int -> String -> (Int -> IntPtr -> JsonRep -> Int -> IO ()) -> Int ->  [String] -> IO ()
+attachAndRun pid bufferName runFn verbosity cntrs = do
   let verbStrLn s = if verbosity > 0 then putStrLn s else return ()
   process <- loadProcess pid
+  ldcntrs <- if length cntrs > 0
+    then do putStrLn "Initializing libpfm"
+            initCounters
+    else return True
   let ctrlStructSz = [C.pure| int{ sizeof(struct ppt_control) } |]
       statSyms = symbolsWithPrefix process (stat_pfx ++ bufferName)
       jsonSyms = symbolsWithPrefix process (json_pfx ++ bufferName)
@@ -186,6 +236,7 @@ attachAndRun pid bufferName runFn verbosity = do
       jsonSym = head jsonSyms
       hmem_sym = head hmemSyms
   checkErrors [
+    check "Initializing libpfm" ldcntrs,
     check (concat ["Could not find ", stat_pfx, bufferName]) $ (length statSyms == 1),
     check (concat ["Could not find ", json_pfx, bufferName]) $ (length jsonSyms == 1),
     check (concat ["Could not find ", hmem_pfx, bufferName]) $ (length hmemSyms == 1)
@@ -243,12 +294,16 @@ attachAndRun pid bufferName runFn verbosity = do
   handle ctrlcHandler $ handle errHandler $ do
     shmAddr <- throwErrnoIfMinus1 "Failed to attach shared memory block" (
       [C.exp| uintptr_t {(uintptr_t) shmat($(int shmId), NULL, 0)} |])
+    let cntrLen = fromIntegral $ length cntrs
     [C.block| void {
       struct ppt_control *pc = (struct ppt_control*) $(uintptr_t shmAddr);
       pc->control_blk_sz = sizeof(struct ppt_control);
       pc->data_block_hmem = 0;
-      pc->nr_perf_ctrs = 0;
+      pc->nr_perf_ctrs = $(uint32_t cntrLen);
       pc->client_flags = 0; } |]
+
+    gotCounters <- setCounters (reverse cntrs) shmAddr
+    checkErrors [ check "Failed to setup performance counters" gotCounters ]
     moldHandle <- swapIntegerInProcess pid hmem_sym 0 (fromIntegral shmId)
     checkErrors [
       check "Failed to set shared memory handle" (isJust moldHandle),
