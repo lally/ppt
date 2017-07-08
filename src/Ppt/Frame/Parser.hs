@@ -163,6 +163,8 @@ data PartialOption = OptLang { _lang :: ELanguage }
                    | OptTime { _time :: ETimeRep }
                    | OptRuntime { _runtime :: ERuntime }
                    | OptTags { _tags :: [ETag] }
+                   | OptCounter { _isNative :: Bool }
+                   | OptDebug { _isDebug :: Bool }
                    deriving (Eq, Show)
 
 makeLenses ''PartialOption
@@ -178,6 +180,16 @@ optionParser = (do { resvd "time"
                        ; ws
                        ; semi
                        ; return (OptRuntime run) })
+               <|> (do { resvd "native_counter"
+                       ; ws
+                       ; run <- boolOption
+                       ; semi
+                       ; return (OptCounter run) })
+               <|> (do { resvd "debug"
+                       ; ws
+                       ; run <- boolOption
+                       ; semi
+                       ; return (OptDebug run) })
                <|> (do { tag <- tagOption
                        ; ws
                        ; semi
@@ -205,6 +217,12 @@ optionCombine opts = let
   buffers = catMaybes $ map (preview buffer) opts
   timereps = catMaybes $ map (preview time) opts
   runtimes = catMaybes $ map (preview runtime) opts
+  lastBool lens = let list = catMaybes $ map (preview lens) opts
+                      len = length list
+                  in drop (max 0 (len-1)) list
+  -- For other runtime opts, concatenate the lists created in this form
+  counters = map ENativeCounter $ lastBool isNative
+  debugOpts = map EDebug $ lastBool isDebug
   theTags = concat $  catMaybes $ map (preview tags) opts
   in (EmitOptions
       <$> max1 buffers "buffer line" (EBuffer "unlisted" Nothing)
@@ -213,7 +231,7 @@ optionCombine opts = let
          ETimeSpec ETimeClockMonotonic)
       <*> max1 runtimes "multithread option" (ERuntime False)
       <*> (pure theTags)
-      <*> (pure []))
+      <*> (pure (counters ++ debugOpts)))
 
 optionUpdate :: EmitOptions -> [PartialOption] -> EmitOptions
 optionUpdate base opts =

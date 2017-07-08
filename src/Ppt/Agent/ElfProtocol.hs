@@ -7,6 +7,7 @@ import Control.Monad.Trans.Either
 import Control.Exception (handle, displayException)
 import Control.Exception.Base
 import Data.Aeson
+import Data.Bits
 import Data.Char
 import Data.Maybe
 import Data.Word
@@ -170,7 +171,6 @@ readBuffer verbosity src start seqno bufelems elem_sz_in_words destvector =
 getBuffers :: Int -> E.Elf -> [E.ElfSymbolTableEntry]
 getBuffers pid process = symbolsWithPrefix process hmem_pfx
 
-
 listBuffers :: Int -> IO ([String])
 listBuffers pid = do
   process <- loadProcess pid
@@ -207,27 +207,49 @@ loadCounter s p = do
 -- |As a cheapie, reverse the counter names on the way in and we'll
 -- just use the length as an index var.
 setCounters :: [String] -> C.CUIntPtr -> IO (Bool)
-setCounters [] _ = return True
-setCounters (cntr:cntrs) shmAddr = do
-  let idx = fromIntegral $ length cntrs
-  addr <- [C.block| uintptr_t {
-              struct ppt_control *ctrl = (struct ppt_control*)$(uintptr_t shmAddr);
-              return (uintptr_t) &ctrl->counterdata[$(int idx)];
-          }|]
-  res <- loadCounter cntr addr
-  if res
-    then setCounters cntrs shmAddr
-    else return False
+setCounters ns shmAddr = do -- setCounters' ns p 0
+-- Plan here: first 'lookup' each one against our list of
+-- builtinCounters.  That gets us a list of the ones we don't need to
+-- initialize.  Then go through the list, matching Nothing and calling
+-- loadCounter on it.
+--  bcounters <- 
+  let builtins = map (\_ -> Nothing) ns
+  setCounters' (zip builtins ns) shmAddr 0 0
+  where
+    setCounters' :: [(Maybe Word32, String)] -> C.CUIntPtr -> Int -> Int -> IO (Bool)
+    setCounters' [] _ _ _ = return True
+    setCounters' ((Just n, _):ns) p idx next_rcx = do
+      let c_idx = fromIntegral idx
+          c_n = fromIntegral n
+      [C.block| void {
+                  struct ppt_control *ctrl = (struct ppt_control*)$(uintptr_t shmAddr);
+                  ctrl->counterdata[$(int c_idx)].rcx = $(int c_n);
+        }|]
+      setCounters' ns p (idx + 1) next_rcx
 
-attachAndRun :: Int -> String -> (Int -> IntPtr -> JsonRep -> Int -> IO ()) -> Int ->  [String] -> IO ()
+    setCounters' ((Nothing, nm):ns) p idx next_rcx = do
+      let c_idx = fromIntegral idx
+          c_rcx = fromIntegral next_rcx
+      addr <- [C.block| uintptr_t {
+                  struct ppt_control *ctrl = (struct ppt_control*)$(uintptr_t shmAddr);
+                  ctrl->counterdata[$(int c_idx)].rcx = $(int c_rcx);
+                  return (uintptr_t) &ctrl->counterdata[$(int c_idx)].event_attr;
+              }|]
+      res <- loadCounter nm addr
+      if res
+        then setCounters' ns shmAddr (idx+1) (next_rcx + 1)
+        else return False
+
+attachAndRun :: Int -> String -> (Int -> IntPtr -> JsonRep -> Int -> [String] -> IO ()) -> Int ->  [String] -> IO ()
 attachAndRun pid bufferName runFn verbosity cntrs = do
   let verbStrLn s = if verbosity > 0 then putStrLn s else return ()
+      nrCntrs = fromIntegral $ length cntrs
   process <- loadProcess pid
   ldcntrs <- if length cntrs > 0
     then do putStrLn "Initializing libpfm"
             initCounters
     else return True
-  let ctrlStructSz = [C.pure| int{ sizeof(struct ppt_control) } |]
+  let ctrlStructSz = [C.pure| int{ sizeof(struct ppt_control) + (sizeof(struct perf_counter_entry) * ($(int nrCntrs) -1))} |]
       statSyms = symbolsWithPrefix process (stat_pfx ++ bufferName)
       jsonSyms = symbolsWithPrefix process (json_pfx ++ bufferName)
       hmemSyms = symbolsWithPrefix process (hmem_pfx ++ bufferName)
@@ -297,12 +319,12 @@ attachAndRun pid bufferName runFn verbosity cntrs = do
     let cntrLen = fromIntegral $ length cntrs
     [C.block| void {
       struct ppt_control *pc = (struct ppt_control*) $(uintptr_t shmAddr);
-      pc->control_blk_sz = sizeof(struct ppt_control);
+      pc->control_blk_sz = $(int ctrlStructSz);
       pc->data_block_hmem = 0;
       pc->nr_perf_ctrs = $(uint32_t cntrLen);
       pc->client_flags = 0; } |]
 
-    gotCounters <- setCounters (reverse cntrs) shmAddr
+    gotCounters <- setCounters cntrs shmAddr
     checkErrors [ check "Failed to setup performance counters" gotCounters ]
     moldHandle <- swapIntegerInProcess pid hmem_sym 0 (fromIntegral shmId)
     checkErrors [
@@ -311,7 +333,7 @@ attachAndRun pid bufferName runFn verbosity cntrs = do
       in check ("Got back old memory handle " ++ show oldHandle) $ (fromIntegral oldHandle) == shmId
       ]
     verbStrLn "Shared memory attached."
-    runFn verbosity (fromIntegral shmAddr) json numElementsInBuffer
+    runFn verbosity (fromIntegral shmAddr) json numElementsInBuffer cntrs
     cleanup pid shmId
   verbStrLn "Done."
 

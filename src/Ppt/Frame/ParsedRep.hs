@@ -63,6 +63,8 @@ data EOption = ENamespace [String]
              | EHeaderSuffix String
              | ESourceSuffix String
              | EFilePrefix String
+             | ENativeCounter Bool
+             | EDebug Bool
              deriving (Generic, Eq, Show)
 
 data EmitOptions = EmitOptions { _eBuffer ::EBuffer
@@ -86,7 +88,6 @@ data FrameMember = FMember { fmType :: Primitive
 -- |Simple binary operation on two values.  We don't do composite
 -- operations on series, just the built-in ops.
 data FBinOperation = FAdd | FSub | FMul | FDiv deriving (Generic, Eq, Show)
-
 
 -- |Operation on a series of values.  Should be implementable in accumulateArray
 data FSeriesOperation = FSum | FMean | FVar deriving (Generic, Eq, Show)

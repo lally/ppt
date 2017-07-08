@@ -212,8 +212,8 @@ writeBufferToFile h vec startIndex nelements verb = do
 
 
 -- Actual command implementations of Agent-mode commands (attach)
-processBufferValues :: String -> Double -> String -> Int -> IntPtr -> JsonRep -> Int -> IO ()
-processBufferValues desc timeOffset fileName verbose shmPtr json bufElems = do
+processBufferValues :: String -> Double -> String -> Int -> IntPtr -> JsonRep -> Int -> [String] -> IO ()
+processBufferValues desc timeOffset fileName verbose shmPtr json bufElems cnt = do
   let (Just elemSize) = frameSize json
       elemSizeInWords = elemSize `div` 4
       destIntPtr = ((roundUp 392 elemSize) + fromIntegral shmPtr)
@@ -242,7 +242,7 @@ processBufferValues desc timeOffset fileName verbose shmPtr json bufElems = do
                                 throwTo self ex
   -- TODO(lally): save counters used here.
   -- TODO(lally): put the TargetInfo into JsonRep instead of the FileRecord.
-  file <- saveFile fileName (FileRecord "1.0.0" "now" desc (round $ timeOffset * 3600.0) [] json)
+  file <- saveFile fileName (FileRecord "1.0.0" "now" desc (round $ timeOffset * 3600.0) cnt json)
   destBuffer <- VM.new (bufElems * elemSizeInWords)
   handle (flushHandler file) $ execLoop file 0 1 destBuffer
   return ()

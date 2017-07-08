@@ -5,6 +5,7 @@ import Ppt.Configuration
 import Ppt.Frame.ParsedRep
 import Ppt.Frame.Layout
 
+import Control.Exception (throw, NoMethodError(..))
 import Text.PrettyPrint ((<>),(<+>))
 import Data.Aeson (encode)
 import Data.ByteString.Lazy.Char8 (unpack)
@@ -74,7 +75,53 @@ data OutputCfg = OutputCfg { timeType :: String -- ^Decltype of time vars
                            , namespace :: [String]
                            , emitOpts :: EmitOptions
                            , frames :: [FrameLayout]
+                           , nativeCounters :: Bool
+                           , counterCount :: Int
+                           , debugOutput :: Bool
                            }
+
+-- | Returns (sourceSuffix, headerSuffix, filePrefix, namespace, nativeCounters) from an array of EOption
+cppOpts :: [EOption] -> (String, String, String, [String], Bool, Bool)
+cppOpts opts =
+  let checkNative (ENativeCounter b) = b
+      checkNative _ = False
+      checkDebug (EDebug b) = b
+      checkDebug _ = False
+      native = any checkNative opts
+      debug = any checkDebug opts
+  in (".cc", ".hh", "ppt-", ["ppt"], native, debug)
+{-
+-- |Returns the option-based elements of OutputCfg
+filePrefs :: EmitOptions -> OutputCfg
+filePrefs e@(EmitOptions b _ _ _ _ opts) =
+  let checkNative (ENativeCounter b) = b
+      checkNative _ = False
+      checkDebug (EDebug b) = b
+      checkDebug _ = False
+      native = any checkNative opts
+      debug = any checkDebug opts
+  in OutputCfg "" "" undefined 4 True False (ebName b) ".cc" ".hh" "" ["ppt", ebName b] e [] native 3 debug
+-}
+makeOutCfg :: EmitOptions -> [FrameLayout] -> OutputCfg
+makeOutCfg e@(EmitOptions b _ ETimeVal (ERuntime mt) _ eOpts) flayouts=
+  let (ssfx, hsfx, fpfx, ns, native, debug) = cppOpts eOpts
+  in (OutputCfg "struct timeval" "time.h" (\var -> PP.text $ "time(&" ++ var ++ ")") 4 True mt
+   (ebName b) ssfx hsfx fpfx ns e flayouts native 3 debug)
+
+makeOutCfg e@(EmitOptions b _ (ETimeSpec src) (ERuntime mt) _ eOpts) flayouts =
+  let (ssfx, hsfx, fpfx, ns, native, debug) = cppOpts eOpts
+      clock = case src of
+        ETimeClockRealtime ->         "CLOCK_REALTIME"
+        ETimeClockRealtimeCoarse ->   "CLOCK_REALTIME_COARSE"
+        ETimeClockMonotonic ->        "CLOCK_MONOTONIC"
+        ETimeClockMonotonicCoarse ->  "CLOCK_MONOTONIC_COARSE"
+        ETimeClockMonotonicRaw ->     "CLOCK_MONOTONIC_RAW"
+        ETimeClockBoottime ->         "CLOCK_BOOTTIME"
+        ETimeClockProcessCputimeId -> "CLOCK_PROCESS_CPUTIME_ID"
+        ETimeClockThreadCputimeId ->  "CLOCK_THREAD_CPUTIME_ID"
+  in (OutputCfg "struct timespec" "time.h" (
+         \var -> PP.text $ "clock_gettime(" ++ clock ++ ", &" ++ var ++ ")")
+       4 True mt (ebName b) ssfx hsfx fpfx ns e flayouts native 3 debug)
 
 -- |A member may require that a module be generated.  Without any
 -- members requiring a module, we don't have to generate it at all.
@@ -94,8 +141,8 @@ instance Ord GenModule where
             then mcomp
             else offcomp
        else szcomp
-  compare GMCounters ( GMSaveBuffer _ _) = LT
-  compare (GMSaveBuffer _ _) GMCounters = GT
+  compare GMCounters ( GMSaveBuffer _ _) = GT
+  compare (GMSaveBuffer _ _) GMCounters = LT
 
 -- |Members to go into the final declaration.  Note that these *must*
 -- be kept in the order presented, as they've already had memory
@@ -160,44 +207,19 @@ dataMember ty name = PP.text ty <+> PP.text name
 blockdecl :: OutputCfg -> PP.Doc -> PP.Doc -> [PP.Doc] ->PP.Doc
 blockdecl cfg name sep elems =
   let sfxElems = map (<> sep) elems
-  in (PP.sep [(name <+> PP.lbrace), PP.nest (indent cfg) (PP.sep sfxElems), PP.rbrace])
---    PP.hang (name <+> PP.lbrace) (indent cfg) $ PP.sep $ sfxElems) <> PP.rbrace
+  in PP.sep [(name <+> PP.lbrace), PP.nest (indent cfg) (PP.sep sfxElems), PP.rbrace]
+
+-- |Non-collapsable block decl.
+blockdeclV :: OutputCfg -> PP.Doc -> PP.Doc -> [PP.Doc] ->PP.Doc
+blockdeclV cfg name sep elems =
+  let sfxElems = map (<> sep) elems
+  in PP.vcat [(name <+> PP.lbrace), PP.nest (indent cfg) (PP.sep sfxElems), PP.rbrace]
 
 funccall :: OutputCfg -> PP.Doc -> [PP.Doc] -> PP.Doc
 funccall cfg name args =
   let prefix = name <+> PP.lparen
       prefixlen = length $ PP.render prefix
   in PP.hang (name <+> PP.lparen) prefixlen $ PP.hsep $ (L.intersperse PP.comma args) ++ [PP.rparen]
-
--- |Returns the option-based elements of OutputCfg
-filePrefs :: EmitOptions -> OutputCfg
-filePrefs e@(EmitOptions b _ _ _ _ _) =
-  OutputCfg "" "" undefined 4 True False (ebName b) ".cc" ".hh" "" ["ppt", ebName b] e []
-
--- | Returns (sourceSuffix, headerSuffix, filePrefix, namespace) from an array of EOption
-cppOpts :: [EOption] -> (String, String, String, [String])
-cppOpts _ = (".cc", ".hh", "ppt-", ["ppt"])
-
-makeOutCfg :: EmitOptions -> [FrameLayout] -> OutputCfg
-makeOutCfg e@(EmitOptions b _ ETimeVal (ERuntime mt) _ eOpts) flayouts=
-  let (ssfx, hsfx, fpfx, ns) = cppOpts eOpts
-  in (OutputCfg "struct timeval" "time.h" (\var -> PP.text $ "time(&" ++ var ++ ")") 4 True mt
-   (ebName b) ssfx hsfx fpfx ns e flayouts)
-
-makeOutCfg e@(EmitOptions b _ (ETimeSpec src) (ERuntime mt) _ eOpts) flayouts =
-  let (ssfx, hsfx, fpfx, ns) = cppOpts eOpts
-      clock = case src of
-        ETimeClockRealtime ->         "CLOCK_REALTIME"
-        ETimeClockRealtimeCoarse ->   "CLOCK_REALTIME_COARSE"
-        ETimeClockMonotonic ->        "CLOCK_MONOTONIC"
-        ETimeClockMonotonicCoarse ->  "CLOCK_MONOTONIC_COARSE"
-        ETimeClockMonotonicRaw ->     "CLOCK_MONOTONIC_RAW"
-        ETimeClockBoottime ->         "CLOCK_BOOTTIME"
-        ETimeClockProcessCputimeId -> "CLOCK_PROCESS_CPUTIME_ID"
-        ETimeClockThreadCputimeId ->  "CLOCK_THREAD_CPUTIME_ID"
-  in (OutputCfg "struct timespec" "time.h" (
-         \var -> PP.text $ "clock_gettime(" ++ clock ++ ", &" ++ var ++ ")")
-       4 True mt (ebName b) ssfx hsfx fpfx ns e flayouts)
 
 includeHeaders :: [String] -> [PP.Doc]
 includeHeaders (h:hs) =
@@ -252,23 +274,35 @@ controlDecl :: OutputCfg -> PP.Doc
 controlDecl cfg =
   let size_t = "size_t"
       uint64_t = "uint64_t"
-  in structDecl cfg "ppt_control" [ (size_t, "control_blk_sz")
+      uint32_t = "uint32_t"
+      ppt_cntr_entry = structDecl cfg "perf_counter_entry" [ (uint32_t, "ecx"),
+                                                             ("struct perf_event_attr", "event_attr") ]
+      ppt_ctrl_decl = structDecl cfg "ppt_control" [ (size_t, "control_blk_sz")
                                   , (uint64_t, "data_block_hmem")
                                   , (uint64_t, "data_block_hmem_attached")
                                   , ("void*", "data_block")
                                   , (size_t, "data_block_sz")
                                   , ("uint32_t", "nr_perf_ctrs")
-                                  , ("struct perf_event_attr", "counterdata[3]")
+                                  , ("struct perf_counter_entry", "counterdata[3]")
                                   , (uint64_t, "client_flags") ]
+  in ppt_cntr_entry <> ppt_ctrl_decl
 
-dataDecl :: OutputCfg -> String -> PP.Doc
-dataDecl cfg first =
-  let x = x
-  in structDecl cfg ("data_" ++ bufName cfg) [ ("static " ++ first ++ " *", "ppt_buf"),
+dataDecl :: OutputCfg -> String -> [GenModule] -> PP.Doc
+dataDecl cfg first mods =
+  let hasCounters (GMCounters) = True
+      hasCounters _ = False
+      enableCounters :: Bool
+      enableCounters = any hasCounters mods
+      enableNativeCounters = enableCounters && (nativeCounters cfg)
+      counterMem = if enableCounters
+                   then  ([("static int", "ppt_counter_fd[3]")] ++
+                          if (nativeCounters cfg) 
+                          then [("static void *", "ppt_counter_mmap")]
+                          else [])
+                   else []
+  in structDecl cfg ("data_" ++ bufName cfg) ([("static " ++ first ++ " *", "ppt_buf"),
                                                ("static int", "ppt_bufsz"),
-                                               ("static int", "ppt_offset")]
-
-
+                                               ("static int", "ppt_offset")] ++ counterMem)
 
 -- |Wraps a 'body' in a namespace decl and #includes.  The 'headers' list elements must already
 -- have either angle brackets or quotes around them.
@@ -321,12 +355,16 @@ makeMember cfg (LMember (PTime _) _ _ _ _ nm) =
              timeSave cfg nm]]
          (dataMember timety nm) timeheaders [])
 
-makeMember cfg (LMember (PCounter Nothing) _ _ _ k nm) =
-  MB [] (dataMember "uint64_t" nm) [] [GMCounters]
+-- These should have been layed out by now!
+makeMember cfg (LMember (PCounter Nothing) _ _ _ k nm) = undefined
+--  MB [] (dataMember "uint64_t" (nm ++ "[" ++ (show $ counterCount cfg) ++ "]")) [] [GMCounters]
 makeMember cfg (LMember PByte _ _ _ (LKPadding n) nm) =
   PrivateMem (dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")) ["cstdint"] []
 
 -- TODO: Put in initializer here if defaultInit outputcfg
+makeMember cfg (LMember (PCounter (Just v)) _ _ _ (LKMember _ _) nm) =
+  MB [] (dataMember "uint64_t" (nm ++ "_" ++ (show v))) [] [GMCounters]
+
 makeMember cfg (LMember ty _ _ _ (LKMember _ _) nm) =
   let declType = case ty of
         PDouble -> "double"
@@ -358,9 +396,8 @@ makeFrameDecl cfg (FLayout nm fr layoutmems) =
 moduleHeaders :: OutputCfg -> [Decl] -> [GenModule] -> [String]
 moduleHeaders cfg decls mods =
   let declsOf (ClassDecl _ _ _ _ h _) = h
-      modsOf GMCounters = []
-      modsOf (GMSaveBuffer _ _) = ["string.h", "sys/types.h", "sys/shm.h", "unistd.h", "atomic", "stdio.h",
-                                   "linux/perf_event.h", "linux/hw_breakpoint.h" ]
+      modsOf GMCounters = ["algorithm", "syscall.h", "linux/perf_event.h"] -- "linux/hw_breakpoint.h" 
+      modsOf (GMSaveBuffer _ _) = ["string.h", "sys/types.h", "sys/shm.h", "unistd.h", "atomic", "stdio.h" ]
   in S.toList $ S.fromList $ (concatMap declsOf decls) ++ (concatMap modsOf mods)
 
 allModules :: [Decl] -> [GenModule]
@@ -408,7 +445,7 @@ modDecls cfg firstName mods =
                       GMSaveBuffer (LayoutIO sz off) mt ->
                         PP.vcat $ [ docConcat ["class ", firstName, ";"],
                                     externDecl "int" ["_ppt_hmem", bufName cfg],
-                                    dataDecl cfg firstName,
+                                    dataDecl cfg firstName mods,
                                     PP.text "bool try_attach();",
                                     docConcat ["class ", firstName, ";"],
                                     docConcatSp ["int", "nextIndex();"]]
@@ -424,7 +461,8 @@ attachFn firstName cfg hasCounters =
   let bufp = "data_" ++ (bufName cfg) ++ "::ppt_buf"
       bufsz = "data_" ++ (bufName cfg) ++ "::ppt_bufsz"
       offset = "data_" ++ (bufName cfg) ++ "::ppt_offset"
-  in blockdecl cfg (PP.text "bool try_attach()") PP.empty [
+  in PP.vcat $ (if hasCounters then [stmt "void setupCounters();", stmt "void closeCounters()"] else []) ++ [
+    blockdecl cfg (PP.text "bool try_attach()") PP.empty [
         blockdecl cfg (docConcat ["if (",bufp," && ", "_ppt_hmem_", bufName cfg, ")"]) PP.semi [
             PP.text "return true"
             ],
@@ -471,6 +509,7 @@ attachFn firstName cfg hasCounters =
             ]),
             stmt "return false"
         ]
+    ]
     where buf = bufName cfg
 
 nextIdxFn :: String -> OutputCfg -> PP.Doc
@@ -489,11 +528,22 @@ moduleSource firstName cfg hasCounters (GMSaveBuffer (LayoutIO sz off) mt) =
         [ docConcat [ "struct ppt_stat_t { pid_t ppt_agent_pid; }"] <> PP.semi,
           externDecl "ppt_stat_t" ["_ppt_stat", bufName cfg] <> PP.semi,
           docConcat ["ppt_stat_t _ppt_stat_", bufName cfg, attrused] <> PP.semi]
-  in PP.sep ([
+      enableNativeCounters = hasCounters && (nativeCounters cfg)
+      counterMem = if hasCounters
+                   then  ([ stmt $ "int data_" ++ (bufName cfg) ++ "::ppt_counter_fd[3]"] ++
+                          if (nativeCounters cfg)
+                          then [stmt $ "void * data_" ++ (bufName cfg) ++ "::ppt_counter_mmap"]
+                          else [])
+                   else []
+      debugMem = if debugOutput cfg
+                 then [stmt $ "ppt_control *get_ctrl_ptr() { return _ppt_ctrl; }"]
+                 else []
+  in PP.vcat ([
     externDecl "const char*" ["_ppt_json", bufName cfg],
     stmt $  firstName  ++ " * data_" ++ (bufName cfg) ++ "::ppt_buf",
     stmt $  "int data_" ++ (bufName cfg) ++ "::ppt_bufsz",
-    stmt $  "int data_" ++ (bufName cfg) ++ "::ppt_offset",
+    stmt $  "int data_" ++ (bufName cfg) ++ "::ppt_offset"]
+            ++ counterMem ++ [
     PP.hsep [docConcat ["const char* _ppt_json_", bufName cfg],
              PP.text attrused, PP.text "=", PP.text (enquote $ makeJSON cfg)] <> PP.semi,
     docConcat ["int _ppt_hmem_", bufName cfg, " ", attrused, ";"]]
@@ -502,12 +552,28 @@ moduleSource firstName cfg hasCounters (GMSaveBuffer (LayoutIO sz off) mt) =
       staticDecl "ppt_control" ["*_ppt_ctrl"],
       nextIdxFn firstName cfg,
       attachFn firstName cfg hasCounters
-    ])
+    ] ++ debugMem)
 
-moduleSource firstName cfg _ GMCounters  = PP.vcat [
-  -- A clear placeholder.
-  stmt "void setupCounters() {}",
-  stmt "void closeCounters() {}"
+moduleSource firstName cfg _ GMCounters  =
+  let isNative = nativeCounters cfg in
+  PP.vcat [
+    blockdeclV cfg (PP.text "void setupCounters()") PP.empty [
+        stmt "int prior_fd = -1",
+        stmt "if (_ppt_ctrl == nullptr) return",
+        blockdecl cfg (PP.text "for (int i = 0 ; i < std::min<int>(_ppt_ctrl->nr_perf_ctrs, 3); i++)") PP.empty [
+            stmt $ "data_" ++ (bufName cfg)++"::ppt_counter_fd[i] = syscall(__NR_perf_event_open, &_ppt_ctrl->counterdata[0].event_attr, 0, -1, prior_fd, 0);",
+            stmt $ "prior_fd = data_"++(bufName cfg)++"::ppt_counter_fd[i];",
+            blockdeclV cfg (PP.text "if (prior_fd < 0)") PP.empty [
+                stmt "_ppt_ctrl->nr_perf_ctrs = 0",
+                stmt $ "for (int j = i; j >= 0; j--) { close(data_" ++ (bufName cfg) ++ "::ppt_counter_fd[j]); }",
+                stmt "break;"
+                ]
+            ]
+        ],
+    blockdecl cfg (PP.text "void closeCounters()") PP.empty [
+        stmt "if (_ppt_ctrl == nullptr) return",
+        stmt $ "for (int j = std::min<int>(_ppt_ctrl->nr_perf_ctrs, 3); j >= 0; j--) { close(data_" ++ (bufName cfg) ++ "::ppt_counter_fd[j]); }"
+        ]
   ]
 
 statLayouts :: [FrameLayout] -> (String, LayoutIOSpec)
@@ -517,8 +583,9 @@ statLayouts flayouts= case flayouts of
 
 modImpls :: OutputCfg -> String -> [GenModule] -> PP.Doc
 modImpls cfg firstName mods =
-  PP.sep $ map (moduleSource firstName cfg hasCounters) mods
+  PP.sep $ map (moduleSource firstName cfg hasCounters) sortMods
   where
+    sortMods = L.sort mods
     hasCounters = (length $ filter (== GMCounters) mods) > 0
 
 cppHeader :: OutputCfg -> String -> [Decl] -> [GenModule] -> [String] -> (FilePath, PP.Doc)
