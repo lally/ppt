@@ -15,12 +15,9 @@ import Foreign.C.Error
 import Foreign.Ptr
 import GHC.Exception
 import Numeric
-import Ppt.Configuration
 import Ppt.ElfProcess
 import Ppt.Frame.Layout
 import Ppt.Frame.Util
-import Ppt.StaticInstrumentation
-import Ppt.SIParser as SIP
 import System.Exit
 import System.Process
 import qualified Data.ByteString.Lazy as BSL

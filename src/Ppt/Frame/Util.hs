@@ -1,10 +1,14 @@
-module Ppt.Frame.Util (showLayoutData) where
+module Ppt.Frame.Util (showLayoutData, showLayout) where
 import Ppt.Frame.Layout
+import Ppt.Frame.LayoutAlgo
 import Ppt.Frame.ParsedRep
 import Ppt.Frame.Parser
+import Ppt.Generate.CpConfig
+import Ppt.Generate.CpPrim
 import Ppt.Generate.Cp
 import Data.Bits (shiftR, (.&.))
 import Foreign.C.Types
+import Text.Printf
 import qualified Data.List as L
 import qualified Data.ByteString as BS
 import qualified Text.PrettyPrint as PP
@@ -65,6 +69,9 @@ genFile str = do
 mkInt n = FMemberElem $ FMember PInt n False
 mkTime n = FMemberElem $ FMember (PTime (ETimeSpec ETimeClockRealtime)) n True
 
+lshow :: LayoutMember -> String
+lshow (LMember ty off algn sz knd nm) = printf "%-20s off=%3d algn=%3d sz=%2d name=%-25s kind=%s" (show ty) off algn sz nm (show knd) 
+
 evalLayout :: LayoutMember -> String
 evalLayout lmem =
   let alignCheck m =
@@ -77,18 +84,20 @@ evalLayout lmem =
       prefix = let result = alignCheck lmem in (if result == 0
                                                 then " > good   "
                                                 else  (" > BAD(" ++ show result ++ ") "))
-  in prefix ++ show lmem
+  in prefix ++ lshow lmem
 
 layoutData :: String -> [LayoutMember] -> IO ()
 layoutData n elems = do
       let paddingSz' (LKPadding n) = n
           paddingSz' _ = 0
           paddingSz mem = paddingSz' $ lKind mem
+          showPad :: Int -> String
+          showPad 0 = "   "
+          showPad n = printf "%3d" n
       putStrLn $ " -- " ++ n ++ " -- "
-      putStrLn $ L.intercalate "\n" $ map (\s -> (show $paddingSz s) ++ evalLayout s) elems
+      putStrLn $ L.intercalate "\n" $ map (\s -> (showPad $paddingSz s) ++ evalLayout s) elems
       putStrLn $ " Padding sum: " ++ (show $ sum $ map paddingSz elems) ++ ", alignment: " ++ (
         show $ maximum $ map lSize elems)
-
 
 showLayout :: [Frame] -> IO ()
 showLayout frames = do

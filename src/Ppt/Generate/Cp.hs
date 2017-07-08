@@ -1,9 +1,10 @@
 {- |C++ Code generator -}
 module Ppt.Generate.Cp where
 
-import Ppt.Configuration
 import Ppt.Frame.ParsedRep
 import Ppt.Frame.Layout
+import Ppt.Generate.CpConfig
+import Ppt.Generate.CpPrim
 
 import Control.Exception (throw, NoMethodError(..))
 import Text.PrettyPrint ((<>),(<+>))
@@ -15,234 +16,12 @@ import qualified Data.Set as S
 import qualified Data.List as L
 import qualified Control.Lens as CL
 import qualified Text.PrettyPrint as PP
-{-
-For input:
-  option clock timeval monotonic;
-
-  frame mainloop {
-      time start, end;
-      int loop_iters;
-  }
-Exmaple Output:
-Header:
- #pragma once
-
-extern volatile int _ppt_saving_buffer_foo;
-
-namespace ppt {
-class mainloop {
-private:
-       int ppt_seqno;
-       int ppt_type;
-public:
-       struct timeval start, end;
-       int loop_iters;
-
-       void snapshot_start() {
-          clock_gettime(CLOCK_MONOTONIC, &start);
-       }
 
 
-private:
-       int ppt_seqno_back;
-};
 
-// overloads for each type.
-inline void writeout(const mainloop& ml) {
-    if (_ppt_saving_buffer_foo) {
-      _ppt_save_foo(static_cast<void*>(&ml));
-    }
-}
-}  // namespace ppt
--}
-
-x64Layout = TargetInfo 8 4 4 16 8 4
-
--- |Derived from EmitOptions for whatever data we need for outputting.
-data OutputCfg = OutputCfg { timeType :: String -- ^Decltype of time vars
-                           , timeHeader :: String
-                             -- ^Which header to include for time support
-                           , timeSave :: (String -> PP.Doc) -- ^Save time to a var
-                           , indent :: Int -- ^Indentation depth
-                           , defaultInit :: Bool
-                             -- ^Does the constructor zero out the type?
-                           , multithreadWrite :: Bool
-                             -- ^Use multithreaded write protocol?
-                           , bufName :: String
-                           , sourceSuffix :: String
-                           , headerSuffix :: String
-                           , filePrefix :: String
-                           , namespace :: [String]
-                           , emitOpts :: EmitOptions
-                           , frames :: [FrameLayout]
-                           , nativeCounters :: Bool
-                           , counterCount :: Int
-                           , debugOutput :: Bool
-                           }
-
--- | Returns (sourceSuffix, headerSuffix, filePrefix, namespace, nativeCounters) from an array of EOption
-cppOpts :: [EOption] -> (String, String, String, [String], Bool, Bool)
-cppOpts opts =
-  let checkNative (ENativeCounter b) = b
-      checkNative _ = False
-      checkDebug (EDebug b) = b
-      checkDebug _ = False
-      native = any checkNative opts
-      debug = any checkDebug opts
-  in (".cc", ".hh", "ppt-", ["ppt"], native, debug)
-{-
--- |Returns the option-based elements of OutputCfg
-filePrefs :: EmitOptions -> OutputCfg
-filePrefs e@(EmitOptions b _ _ _ _ opts) =
-  let checkNative (ENativeCounter b) = b
-      checkNative _ = False
-      checkDebug (EDebug b) = b
-      checkDebug _ = False
-      native = any checkNative opts
-      debug = any checkDebug opts
-  in OutputCfg "" "" undefined 4 True False (ebName b) ".cc" ".hh" "" ["ppt", ebName b] e [] native 3 debug
--}
-makeOutCfg :: EmitOptions -> [FrameLayout] -> OutputCfg
-makeOutCfg e@(EmitOptions b _ ETimeVal (ERuntime mt) _ eOpts) flayouts=
-  let (ssfx, hsfx, fpfx, ns, native, debug) = cppOpts eOpts
-  in (OutputCfg "struct timeval" "time.h" (\var -> PP.text $ "time(&" ++ var ++ ")") 4 True mt
-   (ebName b) ssfx hsfx fpfx ns e flayouts native 3 debug)
-
-makeOutCfg e@(EmitOptions b _ (ETimeSpec src) (ERuntime mt) _ eOpts) flayouts =
-  let (ssfx, hsfx, fpfx, ns, native, debug) = cppOpts eOpts
-      clock = case src of
-        ETimeClockRealtime ->         "CLOCK_REALTIME"
-        ETimeClockRealtimeCoarse ->   "CLOCK_REALTIME_COARSE"
-        ETimeClockMonotonic ->        "CLOCK_MONOTONIC"
-        ETimeClockMonotonicCoarse ->  "CLOCK_MONOTONIC_COARSE"
-        ETimeClockMonotonicRaw ->     "CLOCK_MONOTONIC_RAW"
-        ETimeClockBoottime ->         "CLOCK_BOOTTIME"
-        ETimeClockProcessCputimeId -> "CLOCK_PROCESS_CPUTIME_ID"
-        ETimeClockThreadCputimeId ->  "CLOCK_THREAD_CPUTIME_ID"
-  in (OutputCfg "struct timespec" "time.h" (
-         \var -> PP.text $ "clock_gettime(" ++ clock ++ ", &" ++ var ++ ")")
-       4 True mt (ebName b) ssfx hsfx fpfx ns e flayouts native 3 debug)
-
--- |A member may require that a module be generated.  Without any
--- members requiring a module, we don't have to generate it at all.
-data GenModule = GMCounters
-               | GMSaveBuffer LayoutIOSpec Bool
-               -- ^Store layout, and whether it's multithreaded.
-               deriving (Eq, Show)
-
-instance Ord GenModule where
-  compare GMCounters GMCounters = EQ
-  compare (GMSaveBuffer (LayoutIO lsz loff) lm) (GMSaveBuffer (LayoutIO rsz roff)  rm) =
-    let szcomp = compare lsz rsz
-        offcomp = compare loff roff
-        mcomp = compare lm rm
-    in if szcomp == EQ
-       then if offcomp == EQ
-            then mcomp
-            else offcomp
-       else szcomp
-  compare GMCounters ( GMSaveBuffer _ _) = GT
-  compare (GMSaveBuffer _ _) GMCounters = LT
-
--- |Members to go into the final declaration.  Note that these *must*
--- be kept in the order presented, as they've already had memory
--- layout applied.
-data MemberData = MB { mbMethods ::[PP.Doc], mbMember :: PP.Doc, mbHeaders :: [String]
-                     , mbModules :: [GenModule] }
-                 -- ^Declared members in the original frame specification
-                | PrivateMem { pmbMember :: PP.Doc, pmbHeaders :: [String]
-                             , pmbModules :: [GenModule] }
-                 -- ^PPT private stuff (sequence numbers, type descriminator)
-                  deriving (Eq, Show)
-
--- |Breakdown of members in a given class declaration.
-data QualMember = PubMember PP.Doc
-                | PrivMember PP.Doc
-                deriving (Eq, Show)
-data Decl  = ClassDecl { cName :: String
-                       , cNr :: Maybe Int
-                       , cMembers :: [QualMember]
-                       , cMethods :: [PP.Doc]
-                       , cHeaders :: [String]
-                       , cModules :: [GenModule]}
-           deriving (Eq, Show)
-
-
--- Low level operations
-
-semify cfg (e:es) = (PP.nest (indent cfg) e <> PP.semi):semify cfg es
-semify _ [] = []
-
-docPublic = PP.text "public:"
-docPrivate = PP.text "private:"
-enquote :: String -> String
-enquote s =  "\"" ++ s ++ "\""
-enbracket :: String -> String
-enbracket s =  "<" ++ s ++ ">"
-
-indentify cfg (e:es) = (PP.nest (indent cfg) e):indentify cfg es
-indentify _ [] = []
-
-formatMems cfg (e:es) = (PP.nest (indent cfg) e <> PP.semi):formatMems cfg es
-formatMems _ [] = []
-
-writeDecl :: OutputCfg -> String -> Decl -> PP.Doc
-writeDecl cfg firstName (ClassDecl name typeIdx clsMems clsMeths _ _) =
-  let tag = PP.text $ "class " ++ name
-      publicTail [] = [docPublic]
-      publicTail s =
-        case (last s) of
-          PubMember _ -> []
-          PrivMember _ -> [docPublic]
-      memBody = qualBlock cfg clsMems
-      withMeths meths = (publicTail clsMems) ++ (indentify cfg ((saveFn firstName cfg typeIdx):clsMeths)) 
-  in PP.vcat ((tag <+> PP.lbrace):( memBody ++ (withMeths clsMeths)) ++ [
-    PP.rbrace <> PP.semi])
-
--- |Clearly can only work for simple types.  No arrays.
-dataMember :: String -> String -> PP.Doc
-dataMember ty name = PP.text ty <+> PP.text name
-
--- |Generates a block declaration that's collapsable.
-blockdecl :: OutputCfg -> PP.Doc -> PP.Doc -> [PP.Doc] ->PP.Doc
-blockdecl cfg name sep elems =
-  let sfxElems = map (<> sep) elems
-  in PP.sep [(name <+> PP.lbrace), PP.nest (indent cfg) (PP.sep sfxElems), PP.rbrace]
-
--- |Non-collapsable block decl.
-blockdeclV :: OutputCfg -> PP.Doc -> PP.Doc -> [PP.Doc] ->PP.Doc
-blockdeclV cfg name sep elems =
-  let sfxElems = map (<> sep) elems
-  in PP.vcat [(name <+> PP.lbrace), PP.nest (indent cfg) (PP.sep sfxElems), PP.rbrace]
-
-funccall :: OutputCfg -> PP.Doc -> [PP.Doc] -> PP.Doc
-funccall cfg name args =
-  let prefix = name <+> PP.lparen
-      prefixlen = length $ PP.render prefix
-  in PP.hang (name <+> PP.lparen) prefixlen $ PP.hsep $ (L.intersperse PP.comma args) ++ [PP.rparen]
-
-includeHeaders :: [String] -> [PP.Doc]
-includeHeaders (h:hs) =
-  (mconcat $ map PP.text ["#include <", h, ">"]):includeHeaders hs
-includeHeaders [] = []
-
-docConcat xs = PP.text $ concat xs
-docConcatSp xs = PP.text $ L.intercalate " " xs
-
-quoteString :: String -> String
-quoteString str =
-  qs str
-  where qs (c:cs)
-          | c == '"' = "\\\"" ++ (qs cs)
-          | c == '\\' = "\\\\" ++ (qs cs)
-          | otherwise = c:(qs cs)
-        qs [] = []
-
-stmt :: String -> PP.Doc
-stmt s = PP.text s <> PP.semi
-
+--
 -- Mid level (structures, functions, etc)
-
+--
 makeJSON :: OutputCfg -> String
 makeJSON cfg =
   let json = JsonRep "1.0.0" (emitOpts cfg) x64Layout (frames cfg) [] []
@@ -304,6 +83,10 @@ dataDecl cfg first mods =
                                                ("static int", "ppt_bufsz"),
                                                ("static int", "ppt_offset")] ++ counterMem)
 
+--
+-- High-Level Generation Primitives
+--
+
 -- |Wraps a 'body' in a namespace decl and #includes.  The 'headers' list elements must already
 -- have either angle brackets or quotes around them.
 fileWrap :: OutputCfg -> [String] -> [PP.Doc] -> PP.Doc
@@ -321,82 +104,11 @@ fileWrap cfg headers body =
             blank = [PP.empty]
         in PP.sep (headerBlock ++ blank ++ nsPrefix ++ blank ++ body ++ blank ++ [nsSuffix, PP.empty])
 
-classDecl :: String -> [MemberData] -> Decl
-classDecl n [] = ClassDecl n Nothing [] [] [] []
-classDecl n ((MB methods mem hdrs mods):rest) =
-               let (ClassDecl _ _ pmem pmeth ns ms) = classDecl n rest
-               in ClassDecl n Nothing (PubMember mem:pmem) (methods ++ pmeth) (
-                 hdrs ++ ns) (mods ++ ms)
-classDecl n ((PrivateMem m hdrs mods):rest) =
-               let (ClassDecl _ _ pmem meth ns mds) = classDecl n rest
-               in ClassDecl n Nothing (PrivMember m:pmem) meth (hdrs ++ ns) (mods ++ mds)
-
-qualBlock _ [] = []
-qualBlock cfg ((PubMember n):ns) =
-  let isPub (PubMember _) = True
-      isPub _ = False
-      pubPrefix = map (\(PubMember t) -> t) $ takeWhile isPub ns
-      suffix = drop (length pubPrefix) ns
-  in docPublic:(formatMems cfg (n:pubPrefix)) ++ qualBlock cfg suffix
-qualBlock cfg ((PrivMember n):ns) =
-  let isPub (PrivMember _) = True
-      isPub _ = False
-      pubPrefix = map (\(PrivMember t) -> t) $ takeWhile isPub ns
-      suffix = drop (length pubPrefix) ns
-  in docPrivate:(formatMems cfg (n:pubPrefix)) ++ qualBlock cfg suffix
-
-
--- |Make member declarations out of a single literal (layed out) input member.
-makeMember :: OutputCfg -> LayoutMember -> MemberData
-makeMember cfg (LMember (PTime _) _ _ _ _ nm) =
-  let timety = timeType cfg
-      timeheaders = [timeHeader cfg]
-  in (MB [blockdecl cfg (PP.text $ "void snapshot_" ++ nm ++ "()") PP.semi [
-             timeSave cfg nm]]
-         (dataMember timety nm) timeheaders [])
-
--- These should have been layed out by now!
-makeMember cfg (LMember (PCounter Nothing) _ _ _ k nm) = undefined
---  MB [] (dataMember "uint64_t" (nm ++ "[" ++ (show $ counterCount cfg) ++ "]")) [] [GMCounters]
-makeMember cfg (LMember PByte _ _ _ (LKPadding n) nm) =
-  PrivateMem (dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")) ["cstdint"] []
-
--- TODO: Put in initializer here if defaultInit outputcfg
-makeMember cfg (LMember (PCounter (Just v)) _ _ _ (LKMember _ _) nm) =
-  MB [] (dataMember "uint64_t" (nm ++ "_" ++ (show v))) [] [GMCounters]
-
-makeMember cfg (LMember ty _ _ _ (LKMember _ _) nm) =
-  let declType = case ty of
-        PDouble -> "double"
-        PFloat -> "float"
-        PInt -> "int"
-  in MB [] (dataMember declType nm) [] []
-
-makeMember cfg (LMember ty _ _ _ _ nm) =
-  let declType = case ty of
-        PDouble -> "double"
-        PFloat -> "float"
-        PInt -> "int"
-  in PrivateMem (dataMember declType nm) [] []
-
-sequenceDecls :: [Decl] -> [Decl]
-sequenceDecls frameDecls =
-  if length frameDecls > 1
-  then map (\(frame, index) -> frame { cNr = Just index }) $ zip frameDecls [1..]
-  else frameDecls
-
--- High level (per header/ per source file)
-
-
-makeFrameDecl :: OutputCfg -> FrameLayout -> Decl
-makeFrameDecl cfg (FLayout nm fr layoutmems) =
-  let mems = map (makeMember cfg) layoutmems
-  in classDecl nm mems
 
 moduleHeaders :: OutputCfg -> [Decl] -> [GenModule] -> [String]
 moduleHeaders cfg decls mods =
   let declsOf (ClassDecl _ _ _ _ h _) = h
-      modsOf GMCounters = ["algorithm", "syscall.h", "linux/perf_event.h"] -- "linux/hw_breakpoint.h" 
+      modsOf GMCounters = ["algorithm", "syscall.h", "linux/perf_event.h"]
       modsOf (GMSaveBuffer _ _) = ["string.h", "sys/types.h", "sys/shm.h", "unistd.h", "atomic", "stdio.h" ]
   in S.toList $ S.fromList $ (concatMap declsOf decls) ++ (concatMap modsOf mods)
 
@@ -405,13 +117,28 @@ allModules decls =
   let modsOf (ClassDecl _ _ _ _ _ m) = m
   in S.toList $ S.fromList $ concatMap modsOf decls
 
+writeDecl :: OutputCfg -> String -> Decl -> PP.Doc
+writeDecl cfg firstName (ClassDecl name typeIdx clsMems clsMeths _ _) =
+  let tag = PP.text $ "class " ++ name
+      publicTail [] = [docPublic]
+      publicTail s =
+        case (last s) of
+          PubMember _ -> []
+          PrivMember _ -> [docPublic]
+      memBody = qualBlock cfg clsMems
+      withMeths meths = (publicTail clsMems) ++ (indentify cfg ((saveFn firstName cfg typeIdx):clsMeths)) 
+  in PP.vcat ((tag <+> PP.lbrace):( memBody ++ (withMeths clsMeths)) ++ [
+    PP.rbrace <> PP.semi])
+
+
 saveFn :: String -> OutputCfg -> Maybe Int -> PP.Doc
 saveFn firstName cfg typeIdx =
   let bufp = "data_" ++ (bufName cfg) ++ "::ppt_buf"
       bufsz = "data_" ++ (bufName cfg) ++ "::ppt_bufsz"
       offset = "data_" ++ (bufName cfg) ++ "::ppt_offset"
   in blockdecl cfg (docConcat ["void save()"])  PP.empty [
-       blockdecl cfg (docConcat [ "if (!", bufp, " && !_ppt_hmem_", bufName cfg, ")" ]) PP.semi [PP.text "return"],
+       blockdecl cfg (docConcat [ "if (!", bufp, " && !_ppt_hmem_", bufName cfg, ")" ]) PP.semi [
+           PP.text "return"],
        blockdecl cfg (docConcat [ "if (try_attach())"]) PP.semi $ concat [
            [ "int index = nextIndex()",
              "__ppt_seqno = index",
@@ -452,7 +179,6 @@ modDecls cfg firstName mods =
                       GMCounters -> PP.text "/* counters */"
   in mconcat $ map eachMod mods
 
-
 modInlineDefs :: OutputCfg -> String -> [GenModule] -> PP.Doc
 modInlineDefs cfg firstName mods = PP.empty
 
@@ -483,7 +209,8 @@ attachFn firstName cfg hasCounters =
                 docConcat ["_ppt_hmem_",buf," = 0"],
                 PP.text "return false"
                 ],
-            docConcat [bufp, " = reinterpret_cast<", firstName, "*>(reinterpret_cast<uint8_t*>(_ppt_ctrl) + elem_offset);"],
+            docConcat [bufp, " = reinterpret_cast<", firstName,
+                       "*>(reinterpret_cast<uint8_t*>(_ppt_ctrl) + elem_offset);"],
             stmt $ "_ppt_ctrl->data_block = " ++ bufp,
             docConcat ["_ppt_ctrl->data_block_sz = (ds.shm_segsz - elem_offset) / sizeof(",
                        firstName,")" ] <> PP.semi,
@@ -560,19 +287,23 @@ moduleSource firstName cfg _ GMCounters  =
     blockdeclV cfg (PP.text "void setupCounters()") PP.empty [
         stmt "int prior_fd = -1",
         stmt "if (_ppt_ctrl == nullptr) return",
-        blockdecl cfg (PP.text "for (int i = 0 ; i < std::min<int>(_ppt_ctrl->nr_perf_ctrs, 3); i++)") PP.empty [
-            stmt $ "data_" ++ (bufName cfg)++"::ppt_counter_fd[i] = syscall(__NR_perf_event_open, &_ppt_ctrl->counterdata[0].event_attr, 0, -1, prior_fd, 0);",
+        blockdecl cfg (PP.text "for (int i = 0 ; i < std::min<int>(_ppt_ctrl->nr_perf_ctrs, 3); i++)"
+                      ) PP.empty [
+            stmt $ ("data_" ++ (bufName cfg) ++ "::ppt_counter_fd[i] = syscall(__NR_perf_event_open, " ++
+                    "&_ppt_ctrl->counterdata[0].event_attr, 0, -1, prior_fd, 0);"),
             stmt $ "prior_fd = data_"++(bufName cfg)++"::ppt_counter_fd[i];",
             blockdeclV cfg (PP.text "if (prior_fd < 0)") PP.empty [
                 stmt "_ppt_ctrl->nr_perf_ctrs = 0",
-                stmt $ "for (int j = i; j >= 0; j--) { close(data_" ++ (bufName cfg) ++ "::ppt_counter_fd[j]); }",
+                stmt $ ("for (int j = i; j >= 0; j--) { close(data_" ++ (bufName cfg) ++
+                        "::ppt_counter_fd[j]); }"),
                 stmt "break;"
                 ]
             ]
         ],
     blockdecl cfg (PP.text "void closeCounters()") PP.empty [
         stmt "if (_ppt_ctrl == nullptr) return",
-        stmt $ "for (int j = std::min<int>(_ppt_ctrl->nr_perf_ctrs, 3); j >= 0; j--) { close(data_" ++ (bufName cfg) ++ "::ppt_counter_fd[j]); }"
+        stmt $ ("for (int j = std::min<int>(_ppt_ctrl->nr_perf_ctrs, 3); j >= 0; j--) { close(data_" ++
+                (bufName cfg) ++ "::ppt_counter_fd[j]); }")
         ]
   ]
 

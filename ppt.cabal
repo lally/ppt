@@ -20,16 +20,14 @@ library
                        , Ppt.Agent.Command
                        , Ppt.Agent.ElfProtocol
                        , Ppt.Decode
-                       , Ppt.Configuration
                        , Ppt.Generate
-                       , Ppt.StaticInstrumentation
-                       , Ppt.SIParser
-                       , Ppt.Storage
-                       , Ppt.Generate.C
+                       , Ppt.Generate.CpConfig
+                       , Ppt.Generate.CpPrim
                        , Ppt.Generate.Cp
                        , Ppt.Frame.Parser
                        , Ppt.Frame.ParsedRep
                        , Ppt.Frame.Layout
+                       , Ppt.Frame.LayoutAlgo
                        , Ppt.Frame.Util
                        , Ppt.ElfProcess
 

@@ -1,6 +1,5 @@
 module Main where
 
-import Ppt.Configuration (RunConfig(..), cfgTarget, MachineTarget(..))
 import qualified Ppt.Agent as Agent
 import qualified Ppt.Generate as Gen
 import qualified Ppt.Decode as Decode
@@ -20,8 +19,8 @@ showHelp = do
   putStrLn "      -o name --- file base name"
   putStrLn "ppt retrieve <filename> -- Extract generated instrumentation into current directory."
 
-runCommand :: [String] -> RunConfig -> IO ()
-runCommand args cfg = do
+runCommand :: [String] -> IO ()
+runCommand args = do
   if (length args) == 0 then showHelp else
     case head args of
       "generate" -> Gen.generateCommand (tail args)
@@ -34,5 +33,4 @@ runCommand args cfg = do
 main = do
   -- TODO: Look at the command first.
   args <- getArgs
-  let cfg = RunConfig "/" Target64
-  runCommand args cfg
+  runCommand args

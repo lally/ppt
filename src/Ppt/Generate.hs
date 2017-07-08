@@ -1,16 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Ppt.Generate where
-import Ppt.Configuration
-import Ppt.Storage as S
 
 import qualified Ppt.Frame.Parser as P
 import qualified Ppt.Frame.ParsedRep as PR
-import qualified Ppt.Frame.Layout as L
+--import qualified Ppt.Frame.Layout as L
+import Ppt.Frame.LayoutAlgo as LA
 
 import System.IO
-import Ppt.Generate.C (emitC)
-import Ppt.StaticInstrumentation as Inst
-import Ppt.SIParser as SIP
 import System.Console.GetOpt as GO
 import Data.Either
 import Data.Char (toUpper)
@@ -23,11 +19,9 @@ import qualified Data.List as L
 import qualified Data.HashMap.Strict as HM
 import qualified Text.PrettyPrint as PP
 import qualified Ppt.Generate.Cp as CP
+import qualified Ppt.Generate.CpConfig as CPC
 
 import System.Console.GetOpt
-
-generateC :: Inst.FullSpecification -> String
-generateC inst = show inst
 
 {-
    Command line processing support
@@ -140,7 +134,7 @@ generateCommand args =
               return ()
             Right (PR.Buffer emitopts frames) -> do
               let partialOpts = normalize $ concat opts
-                  layout = L.compileFrames' CP.x64Layout frames
+                  layout = LA.compileFrames' CPC.x64Layout frames
               case layout of
                 Left s -> putStrLn ("Error in compilation: " ++ s)
                 Right layouts -> do

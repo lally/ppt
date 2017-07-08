@@ -1,0 +1,29 @@
+#+TITLE: Testing PPT
+
+* Goal
+  To make sure ~ppt~ works pretty well.
+
+* Components
+  The tests are laid out by functionality, not to mirror the source code base.
+  This lets me move functionality around during refactors, mostly.
+** TODO Parsing
+** TODO In-Memory Layout
+   - Relative ordering should be preserved
+   - Padding should be minimal
+   - Sizes between frames in same buffer should be the same.
+** TODO Code Generation
+** TODO Attach                                                      :COMPLEX:
+*** A good place to shove a backwards-compat attach test
+    - Mostly worried about older layout systems and JSON schema
+    - That don't exist yet.
+*** Rate adaptation
+** TODO Decode
+** TODO Computing Derived Values
+** TODO Live Monitoring
+
+* Organization
+  - Create *Spec and *Gen modules for different components
+  - Then pipeline them.
+    - So that generated data from one can then be processed normally in the
+      next phase, creating the next *Spec.  E.g., ParserGen -> LayoutGen.
+
