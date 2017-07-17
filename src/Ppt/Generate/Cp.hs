@@ -17,8 +17,6 @@ import qualified Data.List as L
 import qualified Control.Lens as CL
 import qualified Text.PrettyPrint as PP
 
-
-
 --
 -- Mid level (structures, functions, etc)
 --
@@ -126,10 +124,19 @@ writeDecl cfg firstName (ClassDecl name typeIdx clsMems clsMeths _ _) =
           PubMember _ -> []
           PrivMember _ -> [docPublic]
       memBody = qualBlock cfg clsMems
-      withMeths meths = (publicTail clsMems) ++ (indentify cfg ((saveFn firstName cfg typeIdx):clsMeths)) 
+      chosenSaveFn = if firstName == name
+                     then saveFn firstName cfg typeIdx
+                     else restSaveFn firstName cfg
+
+      withMeths meths = (publicTail clsMems) ++ (indentify cfg ((chosenSaveFn):clsMeths)) 
   in PP.vcat ((tag <+> PP.lbrace):( memBody ++ (withMeths clsMeths)) ++ [
     PP.rbrace <> PP.semi])
 
+restSaveFn :: String -> OutputCfg -> PP.Doc
+restSaveFn firstName cfg =
+  blockdecl cfg (docConcat ["void save()"]) PP.empty [
+    stmt $ "reinterpret_cast<" ++ firstName ++ "*>(this)->save()"
+  ]
 
 saveFn :: String -> OutputCfg -> Maybe Int -> PP.Doc
 saveFn firstName cfg typeIdx =
@@ -176,7 +183,9 @@ modDecls cfg firstName mods =
                                     PP.text "bool try_attach();",
                                     docConcat ["class ", firstName, ";"],
                                     docConcatSp ["int", "nextIndex();"]]
-                      GMCounters -> PP.text "/* counters */"
+                      GMCounters ->
+                        let args = L.intercalate "," $ take (counterCount cfg) $ repeat "uint64_t*"
+                        in PP.vcat [ PP.text $ "void save_counters(" ++ args ++ ");" ]
   in mconcat $ map eachMod mods
 
 modInlineDefs :: OutputCfg -> String -> [GenModule] -> PP.Doc
@@ -187,7 +196,7 @@ attachFn firstName cfg hasCounters =
   let bufp = "data_" ++ (bufName cfg) ++ "::ppt_buf"
       bufsz = "data_" ++ (bufName cfg) ++ "::ppt_bufsz"
       offset = "data_" ++ (bufName cfg) ++ "::ppt_offset"
-  in PP.vcat $ (if hasCounters then [stmt "void setupCounters();", stmt "void closeCounters()"] else []) ++ [
+  in PP.vcat $ (if hasCounters then [stmt "void setupCounters()", stmt "void closeCounters()"] else []) ++ [
     blockdecl cfg (PP.text "bool try_attach()") PP.empty [
         blockdecl cfg (docConcat ["if (",bufp," && ", "_ppt_hmem_", bufName cfg, ")"]) PP.semi [
             PP.text "return true"
@@ -283,7 +292,7 @@ moduleSource firstName cfg hasCounters (GMSaveBuffer (LayoutIO sz off) mt) =
 
 moduleSource firstName cfg _ GMCounters  =
   let isNative = nativeCounters cfg in
-  PP.vcat [
+  PP.vcat ([
     blockdeclV cfg (PP.text "void setupCounters()") PP.empty [
         stmt "int prior_fd = -1",
         stmt "if (_ppt_ctrl == nullptr) return",
@@ -305,7 +314,18 @@ moduleSource firstName cfg _ GMCounters  =
         stmt $ ("for (int j = std::min<int>(_ppt_ctrl->nr_perf_ctrs, 3); j >= 0; j--) { close(data_" ++
                 (bufName cfg) ++ "::ppt_counter_fd[j]); }")
         ]
-  ]
+  ] ++ if isNative then [] else [
+    let args = L.intercalate ", " $ map (\n -> "uint64_t* " ++ [n]) $ reverse $ take (counterCount cfg) ['a'..'z']
+        pfx = "data_" ++ (bufName cfg) ++ "::"
+        fd = pfx ++ "ppt_counter_fd[0]"
+    in blockdecl cfg (PP.text $ "void save_counters(" ++ args ++ ")") PP.empty [
+      blockdeclV cfg (PP.text $ "if (_ppt_ctrl != nullptr && _ppt_ctrl->nr_perf_ctrs > 0 && " ++ fd ++ " > -1)") PP.empty ([
+          stmt $ "uint64_t buf[" ++ show (1 + counterCount cfg) ++ "]",
+          stmt $ "read(" ++ fd ++ ", buf, " ++ show (1 + counterCount cfg) ++ "*sizeof(uint64_t))" ]
+          ++ (map (\(n, i) -> stmt $ '*':n:(" = buf[" ++ (show i) ++ "]")) $ take (counterCount cfg) $ zip ['a'..'z'] [1..]))
+      ]
+    ])
+
 
 statLayouts :: [FrameLayout] -> (String, LayoutIOSpec)
 statLayouts flayouts= case flayouts of

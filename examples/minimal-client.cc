@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <linux/perf_event.h>
+#include <sys/mman.h>
 #include <asm/unistd.h>
 #include <perfmon/pfmlib.h>
 #include <perfmon/pfmlib_perf_event.h>
@@ -86,6 +87,8 @@ typedef struct {
    pe.exclude_hv = 1;
 
    fd = perf_event_open(&pe, 0, -1, -1, 0);
+   mmap(NULL, sysconf(_SC_PAGESIZE), PROT_READ, MAP_SHARED, fd, 0);
+
    if (fd == -2) {
       fprintf(stderr, "Error opening leader %llx\n", pe.config);
       exit(EXIT_FAILURE);

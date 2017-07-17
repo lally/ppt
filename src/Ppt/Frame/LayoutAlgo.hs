@@ -154,7 +154,7 @@ layoutMember tinfo fr@(FMember ty nm True) =
         makePair t a b = [
           LMember t 0 algn sz (LKMember fr (Just (IntBegin a b))) (nm ++ pfx ++ "_start"),
           LMember t 0 algn sz (LKMember fr (Just (IntEnd a b))) (nm ++ pfx ++ "_end")]
-          where pfx = if b > 1 then show a else ""
+          where pfx = if b > 1 then ("_" ++ show a) else ""
 
 layoutMember tinfo fr@(FMember ty nm False) =
   [LMember ty 0 algn sz (LKMember fr Nothing) (nm)]

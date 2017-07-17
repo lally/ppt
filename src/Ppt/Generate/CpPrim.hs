@@ -47,6 +47,8 @@ classDecl n ((PrivateMem m hdrs mods):rest) =
                let (ClassDecl _ _ pmem meth ns mds) = classDecl n rest
                in ClassDecl n Nothing (PrivMember m:pmem) meth (hdrs ++ ns) (mods ++ mds)
 
+-- |A block of members, prefixed with a public/private block label.
+-- All methods are public.
 qualBlock _ [] = []
 qualBlock cfg ((PubMember n):ns) =
   let isPub (PubMember _) = True
@@ -77,21 +79,83 @@ makeMember cfg (LMember (PCounter Nothing) _ _ _ k nm) = undefined
 makeMember cfg (LMember PByte _ _ _ (LKPadding n) nm) =
   PrivateMem (dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")) ["cstdint"] []
 
--- TODO: Put in initializer here if defaultInit outputcfg
-makeMember cfg (LMember (PCounter (Just v)) _ _ _ (LKMember _ _) nm) =
-  MB [] (dataMember "uint64_t" (nm ++ "_" ++ (show v))) [] [GMCounters]
+makeMember cfg (LMember (PCounter (Just 0)) _ _ _ (LKMember frmem side) nm) =
+  {-
+   -- For native:
+    if (data_BUFNAME::ppt_counter_fd[2] != -1) {
+       goto __ppt_NM_Load3;
+    } else if (data_BUFNAME::ppt_counter_fd[1] != -1) {
+       goto __ppt_NM_Load2;
+    } else if (data_BUFNAME::ppt_counter_fd[0] != -1) {
+       goto __ppt_NM_Load1;
+    } else {
+      return;
+    }
 
+    uint32_t a, d;
+
+  __ppt_NMLoad3:
+    __asm__ volatile("rdpmc" :  "=a" (a), "=d" (d) : "c" (data_BUFNAME::ppt_counter_rcx[2]));
+    v2 = a | (static_cast<uint64_t>(d) << 32);
+  __ppt_NMLoad2:
+    __asm__ volatile("rdpmc" :  "=a" (a), "=d" (d) : "c" (data_BUFNAME::ppt_counter_rcx[1]));
+    v1 = a | (static_cast<uint64_t>(d) << 32);
+  __ppt_NMLoad1:
+    __asm__ volatile("rdpmc" :  "=a" (a), "=d" (d) : "c" (data_BUFNAME::ppt_counter_rcx[0]));
+    v0 = a | (static_cast<uint64_t>(d) << 32);
+
+   -- For syscall:
+   save_counters(&v0, &v1, &v2);
+
+  -}
+  let maxCounterIdx = (counterCount cfg) - 1
+      indices = reverse [0 .. maxCounterIdx]
+      baseName = fmName frmem
+      memSfx = if defaultInit cfg then "= 0" else ""
+      counterFor n = case side of
+              Nothing -> baseName ++  "_" ++ show n
+              Just (IntBegin a b) -> baseName ++ (if b > 1 then ("_" ++ show n) else "") ++ "_start"
+              Just (IntEnd a b) -> baseName ++ (if b > 1 then ("_" ++ show n) else "") ++ "_end"
+      functionsBaseName = case side of
+        Nothing -> baseName
+        Just (IntBegin _ _) -> baseName ++ "_start"
+        Just (IntEnd _ _) -> baseName ++ "_end"
+      saveFn = if nativeCounters cfg
+               then
+                 let labelFor n = "__ppt_" ++ nm ++ "_Load" ++ show (n+1)
+                     condFor n = blockdecl cfg (PP.text $ "if (data_" ++ (bufName cfg) ++ "::ppt_counter_fd[" ++
+                                                show n ++ "] != -1)") PP.semi [
+                       stmt $ "goto " ++ labelFor n
+                       ]
+                     condCat conds = PP.vcat (head conds : (map (\c -> PP.text "else " <> c) $ tail conds))
+                     loadFor n = [(PP.text $ labelFor n) <> ":",
+                                  stmt $ "__asm__ volatile(\"rdpmc\" :  \"=a\" (a), \"=d\" (d) : \"c\" (data_" ++
+                                     (bufName cfg) ++ "::ppt_counter_rcx[" ++ show n ++ "]));",
+                                  stmt $ nm ++ "_" ++ (show n) ++ "= a | (static_cast<uint64_t>(d) << 32);" ]
+                 in blockdecl cfg (PP.text $ "void snapshot_" ++ functionsBaseName ++ "()") PP.semi (
+                   condCat (map condFor indices) : (stmt "uint32_t a,d;":(concatMap loadFor indices)))
+               else
+                 let args = L.intercalate ", " $ map (\i -> "&" ++ (counterFor i)) indices
+                 in blockdecl cfg (PP.text $ "void snapshot_" ++ functionsBaseName ++ "()") PP.empty [
+                   stmt $ "save_counters(" ++ args ++ ")"]
+  in MB [saveFn] (dataMember "uint64_t" (nm ++ memSfx)) [] [GMCounters]
+
+makeMember cfg (LMember (PCounter (Just v)) _ _ _ (LKMember _ _) nm) =
+  let memSfx = if defaultInit cfg then "= 0" else ""
+  in MB [] (dataMember "uint64_t" (nm ++ memSfx)) [] [GMCounters]
+
+-- |Regular member types.
 makeMember cfg (LMember ty _ _ _ (LKMember _ _) nm) =
   let declType = case ty of
         PDouble -> "double"
         PFloat -> "float"
         PInt -> "int"
-  in MB [] (dataMember declType nm) [] []
+      memSfx = if defaultInit cfg then "= 0" else ""
+  in MB [] (dataMember declType (nm ++ memSfx)) [] []
 
+-- |Non-member types.  Should just be ints.  Padding was defined in another case up above.
 makeMember cfg (LMember ty _ _ _ _ nm) =
   let declType = case ty of
-        PDouble -> "double"
-        PFloat -> "float"
         PInt -> "int"
   in PrivateMem (dataMember declType nm) [] []
 

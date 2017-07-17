@@ -12,5 +12,8 @@ frame first {
    interval counter events;
 }
 
+frame second {
+   interval counter foos;
+}
 
 
