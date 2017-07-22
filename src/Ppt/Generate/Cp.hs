@@ -59,9 +59,9 @@ controlDecl cfg =
                                   , (uint64_t, "data_block_hmem_attached")
                                   , ("void*", "data_block")
                                   , (size_t, "data_block_sz")
+                                  , (uint64_t, "client_flags")
                                   , ("uint32_t", "nr_perf_ctrs")
-                                  , ("struct perf_counter_entry", "counterdata[3]")
-                                  , (uint64_t, "client_flags") ]
+                                  , ("struct perf_counter_entry", "counterdata[3]")]
   in ppt_cntr_entry <> ppt_ctrl_decl
 
 dataDecl :: OutputCfg -> String -> [GenModule] -> PP.Doc
@@ -232,18 +232,17 @@ attachFn firstName cfg hasCounters =
                 else []) ++
             [stmt "return true"
             ]),
-        blockdecl cfg (docConcat ["else if (",bufp," && !_ppt_hmem_",buf,")"]) PP.empty ([
-            blockdecl cfg (PP.text $ "if (shmdt(_ppt_ctrl) != 0)") PP.semi [
-                docConcat ["perror(\"failed ppt detach of ",buf,": shmdt\")"]
-                ],
-            stmt $ bufp ++ " = nullptr",
-            docConcat ["_ppt_hmem_", buf, " = 0"] <> PP.semi]
-            ++ (if hasCounters
-                then [stmt "closeCounters()"]
-                else []) ++
-            [
-            ]),
-            stmt "return false"
+        blockdecl cfg (docConcat ["else if (",bufp," && !_ppt_hmem_",buf,")"]) PP.empty (
+            (if hasCounters
+              then [stmt "closeCounters()"]
+              else []) ++ [
+                blockdecl cfg (PP.text $ "if (shmdt(_ppt_ctrl) != 0)") PP.semi [
+                    docConcat ["perror(\"failed ppt detach of ",buf,": shmdt\")"]
+                    ],
+                stmt $ bufp ++ " = nullptr",
+                stmt $ "_ppt_ctrl = nullptr",
+                docConcat ["_ppt_hmem_", buf, " = 0"] <> PP.semi,
+                stmt "return false"])
         ]
     ]
     where buf = bufName cfg
@@ -314,18 +313,26 @@ moduleSource firstName cfg _ GMCounters  =
         stmt $ ("for (int j = std::min<int>(_ppt_ctrl->nr_perf_ctrs, 3); j >= 0; j--) { close(data_" ++
                 (bufName cfg) ++ "::ppt_counter_fd[j]); }")
         ]
-  ] ++ if isNative then [] else [
-    let args = L.intercalate ", " $ map (\n -> "uint64_t* " ++ [n]) $ reverse $ take (counterCount cfg) ['a'..'z']
+  ] ++ if isNative
+       then [] -- native counters are saved in inline decls.
+       else [
+    let args = L.intercalate ", " $ map (\n -> "uint64_t* " ++ [n]) $ take (counterCount cfg) ['a'..'z']
         pfx = "data_" ++ (bufName cfg) ++ "::"
         fd = pfx ++ "ppt_counter_fd[0]"
     in blockdecl cfg (PP.text $ "void save_counters(" ++ args ++ ")") PP.empty [
-      blockdeclV cfg (PP.text $ "if (_ppt_ctrl != nullptr && _ppt_ctrl->nr_perf_ctrs > 0 && " ++ fd ++ " > -1)") PP.empty ([
+        blockdeclV cfg (PP.text $ "if (_ppt_ctrl != nullptr && _ppt_ctrl->nr_perf_ctrs > 0 && " ++ fd ++ " > -1)") PP.empty ([
           stmt $ "uint64_t buf[" ++ show (1 + counterCount cfg) ++ "]",
-          stmt $ "read(" ++ fd ++ ", buf, " ++ show (1 + counterCount cfg) ++ "*sizeof(uint64_t))" ]
-          ++ (map (\(n, i) -> stmt $ '*':n:(" = buf[" ++ (show i) ++ "]")) $ take (counterCount cfg) $ zip ['a'..'z'] [1..]))
-      ]
-    ])
-
+          stmt $ "read(" ++ fd ++ ", buf, (1 + _ppt_ctrl->nr_perf_ctrs) * sizeof(uint64_t))",
+          blockdeclV cfg (PP.text $ "switch (_ppt_ctrl->nr_perf_ctrs)") PP.empty (
+              let letters = ['a'..'z']
+                  indices = take (counterCount cfg) [0..]
+              in ((concatMap (\n -> [PP.text $ "case " ++ show (n+1) ++ ":",
+                                   stmt $ ' ':' ':'*':(letters !! n):(" = buf[" ++ (show (n + 1)) ++ "]")]) $ reverse indices)
+                   ++ [stmt "default: break"])
+              )
+          ]) -- switch(nr ctrs)
+        ] -- void save_counters()
+    ]) -- else ...
 
 statLayouts :: [FrameLayout] -> (String, LayoutIOSpec)
 statLayouts flayouts= case flayouts of

@@ -109,7 +109,7 @@ makeMember cfg (LMember (PCounter (Just 0)) _ _ _ (LKMember frmem side) nm) =
 
   -}
   let maxCounterIdx = (counterCount cfg) - 1
-      indices = reverse [0 .. maxCounterIdx]
+      indices = [0 .. maxCounterIdx]
       baseName = fmName frmem
       memSfx = if defaultInit cfg then "= 0" else ""
       counterFor n = case side of
@@ -132,10 +132,11 @@ makeMember cfg (LMember (PCounter (Just 0)) _ _ _ (LKMember frmem side) nm) =
                                   stmt $ "__asm__ volatile(\"rdpmc\" :  \"=a\" (a), \"=d\" (d) : \"c\" (data_" ++
                                      (bufName cfg) ++ "::ppt_counter_rcx[" ++ show n ++ "]));",
                                   stmt $ nm ++ "_" ++ (show n) ++ "= a | (static_cast<uint64_t>(d) << 32);" ]
+                     revIndices = reverse indices
                  in blockdecl cfg (PP.text $ "void snapshot_" ++ functionsBaseName ++ "()") PP.semi (
-                   condCat (map condFor indices) : (stmt "uint32_t a,d;":(concatMap loadFor indices)))
+                   condCat (map condFor revIndices) : (stmt "uint32_t a,d;":(concatMap loadFor revIndices)))
                else
-                 let args = L.intercalate ", " $ map (\i -> "&" ++ (counterFor i)) indices
+                 let args = L.intercalate ", " $ map (\i -> "&" ++ (counterFor i)) $ indices
                  in blockdecl cfg (PP.text $ "void snapshot_" ++ functionsBaseName ++ "()") PP.empty [
                    stmt $ "save_counters(" ++ args ++ ")"]
   in MB [saveFn] (dataMember "uint64_t" (nm ++ memSfx)) [] [GMCounters]

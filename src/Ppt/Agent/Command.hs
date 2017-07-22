@@ -240,7 +240,7 @@ processBufferValues desc timeOffset fileName verbose shmPtr json bufElems cnt = 
       flushHandler file ex = do self <- myThreadId
                                 hClose file
                                 throwTo self ex
-  -- TODO(lally): save counters used here.
+
   -- TODO(lally): put the TargetInfo into JsonRep instead of the FileRecord.
   file <- saveFile fileName (FileRecord "1.0.0" "now" desc (round $ timeOffset * 3600.0) cnt json)
   destBuffer <- VM.new (bufElems * elemSizeInWords)

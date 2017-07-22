@@ -181,30 +181,67 @@ initCounters = do
   res <- [C.exp| int{ pfm_initialize() } |]
   return $ (fromIntegral ( [C.pure| int { $(int res) == PFM_SUCCESS }|])) /= 0
 
-loadCounter :: String -> C.CUIntPtr -> IO (Bool)
-loadCounter s p = do
+
+data CounterInfo = InvalidCounter
+                 | ArchitecturalCounter
+                 | RawCounter
+                 deriving (Eq, Show)
+-- |Identify the PMU of the counter and return that (if there is one)
+loadCounter :: String -> C.CUIntPtr -> Int -> IO (Bool)
+loadCounter s p verbosity = do
+  let verb = fromIntegral verbosity
   counterName <- FCS.newCString s
   res <- [C.block| int {
             struct perf_event_attr* pe = (struct perf_event_attr*)$(uintptr_t p);
             memset(pe, 0, sizeof(struct perf_event_attr));
             pfm_perf_encode_arg_t pfm_arg = { pe, NULL, sizeof(pfm_perf_encode_arg_t), 0, 0, 0 };
-            int pfm_ret = pfm_get_os_event_encoding($(const char* counterName), PFM_PLM3, PFM_OS_PERF_EVENT_EXT, &pfm_arg);
+            int pfm_ret = pfm_get_os_event_encoding($(const char* counterName), PFM_PLM3, PFM_OS_PERF_EVENT_EXT,
+                                                    &pfm_arg);
             if (pfm_ret != PFM_SUCCESS) {
-                printf("Failed to get perf encoding for %s (pe=%p): %s\n", $(const char* counterName), pe, pfm_strerror(pfm_ret));
+                printf("Failed to get perf encoding for %s (pe=%p): %s\n", $(const char* counterName),
+                       pe, pfm_strerror(pfm_ret));
                 return -1;
+            } else {
+                printf("Loaded %s to %p\n", $(const char* counterName), pe);
+                if ($(uint32_t verb) > 1) {
+                   switch(pe->type) {
+                   case PERF_TYPE_HARDWARE: {
+                      printf (" PERF_TYPE_HARDWARE: %llu\n", pe->config);
+                   } break;
+                   case PERF_TYPE_SOFTWARE: {
+                      printf (" PERF_TYPE_SOFTWARE: %llu\n", pe->config);
+                   } break;
+                   case PERF_TYPE_TRACEPOINT: {
+                      printf (" PERF_TYPE_TRACEPOINT: %llu\n", pe->config);
+                   } break;
+                   case PERF_TYPE_HW_CACHE: {
+                      printf (" PERF_TYPE_HW_CACHE: %llu\n", pe->config);
+                   } break;
+                   case PERF_TYPE_RAW: {
+                      printf (" PERF_TYPE_RAW: %llu\n", pe->config);
+                   } break;
+                   case PERF_TYPE_BREAKPOINT: {
+                      printf (" PERF_TYPE_BREAKPOINT: %llu\n", pe->config);
+                   } break;
+                   default:
+                      printf (" (dynamic PMU): %llu\n", pe->config);
+                   }
+                }
             }
             pe->disabled = 0;
             pe->exclude_kernel = 1;
             pe->exclude_hv = 1;
+            pe->read_format = PERF_FORMAT_GROUP;
             return 0;
           } |]
   FMA.free counterName
   return $ res /= (-1)
 
+
 -- |As a cheapie, reverse the counter names on the way in and we'll
 -- just use the length as an index var.
-setCounters :: [String] -> C.CUIntPtr -> IO (Bool)
-setCounters ns shmAddr = do -- setCounters' ns p 0
+setCounters :: [String] -> C.CUIntPtr -> Int -> IO (Bool)
+setCounters ns shmAddr verbosity = do -- setCounters' ns p 0
 -- Plan here: first 'lookup' each one against our list of
 -- builtinCounters.  That gets us a list of the ones we don't need to
 -- initialize.  Then go through the list, matching Nothing and calling
@@ -232,7 +269,7 @@ setCounters ns shmAddr = do -- setCounters' ns p 0
                   ctrl->counterdata[$(int c_idx)].rcx = $(int c_rcx);
                   return (uintptr_t) &ctrl->counterdata[$(int c_idx)].event_attr;
               }|]
-      res <- loadCounter nm addr
+      res <- loadCounter nm addr verbosity
       if res
         then setCounters' ns shmAddr (idx+1) (next_rcx + 1)
         else return False
@@ -246,7 +283,8 @@ attachAndRun pid bufferName runFn verbosity cntrs = do
     then do putStrLn "Initializing libpfm"
             initCounters
     else return True
-  let ctrlStructSz = [C.pure| int{ sizeof(struct ppt_control) + (sizeof(struct perf_counter_entry) * ($(int nrCntrs) -1))} |]
+  let ctrlStructSz = [C.pure| int{ sizeof(struct ppt_control) +
+                                   (sizeof(struct perf_counter_entry) * ($(int nrCntrs) -1))} |]
       statSyms = symbolsWithPrefix process (stat_pfx ++ bufferName)
       jsonSyms = symbolsWithPrefix process (json_pfx ++ bufferName)
       hmemSyms = symbolsWithPrefix process (hmem_pfx ++ bufferName)
@@ -319,9 +357,11 @@ attachAndRun pid bufferName runFn verbosity cntrs = do
       pc->control_blk_sz = $(int ctrlStructSz);
       pc->data_block_hmem = 0;
       pc->nr_perf_ctrs = $(uint32_t cntrLen);
-      pc->client_flags = 0; } |]
+      pc->client_flags = 0;
+      printf("set %p -> nr_perf_ctrs to %d\n", pc, $(uint32_t cntrLen));
+      } |]
 
-    gotCounters <- setCounters cntrs shmAddr
+    gotCounters <- setCounters cntrs shmAddr verbosity
     checkErrors [ check "Failed to setup performance counters" gotCounters ]
     moldHandle <- swapIntegerInProcess pid hmem_sym 0 (fromIntegral shmId)
     checkErrors [
