@@ -298,8 +298,8 @@ moduleSource firstName cfg _ GMCounters  =
         blockdecl cfg (PP.text "for (int i = 0 ; i < std::min<int>(_ppt_ctrl->nr_perf_ctrs, 3); i++)"
                       ) PP.empty [
             stmt $ ("data_" ++ (bufName cfg) ++ "::ppt_counter_fd[i] = syscall(__NR_perf_event_open, " ++
-                    "&_ppt_ctrl->counterdata[0].event_attr, 0, -1, prior_fd, 0);"),
-            stmt $ "prior_fd = data_"++(bufName cfg)++"::ppt_counter_fd[i];",
+                    "&_ppt_ctrl->counterdata[i].event_attr, 0, -1, prior_fd, 0);"),
+            stmt $ "prior_fd = data_"++(bufName cfg)++"::ppt_counter_fd[0];",
             blockdeclV cfg (PP.text "if (prior_fd < 0)") PP.empty [
                 stmt "_ppt_ctrl->nr_perf_ctrs = 0",
                 stmt $ ("for (int j = i; j >= 0; j--) { close(data_" ++ (bufName cfg) ++
