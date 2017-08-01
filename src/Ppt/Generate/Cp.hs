@@ -71,10 +71,12 @@ dataDecl cfg first mods =
       enableCounters :: Bool
       enableCounters = any hasCounters mods
       enableNativeCounters = enableCounters && (nativeCounters cfg)
+      nrCounters = show $ counterCount cfg
       counterMem = if enableCounters
-                   then  ([("static int", "ppt_counter_fd[3]")] ++
+                   then  ([("static int", "ppt_counter_fd[" ++ nrCounters ++ "]")] ++
                           if (nativeCounters cfg) 
-                          then [("static void *", "ppt_counter_mmap")]
+                          then [("static void *", "ppt_counter_mmap"),
+                                ("static uint64_t", "ppt_counter_rcx[" ++ nrCounters ++ "]")]
                           else [])
                    else []
   in structDecl cfg ("data_" ++ bufName cfg) ([("static " ++ first ++ " *", "ppt_buf"),
@@ -264,10 +266,12 @@ moduleSource firstName cfg hasCounters (GMSaveBuffer (LayoutIO sz off) mt) =
           externDecl "ppt_stat_t" ["_ppt_stat", bufName cfg] <> PP.semi,
           docConcat ["ppt_stat_t _ppt_stat_", bufName cfg, attrused] <> PP.semi]
       enableNativeCounters = hasCounters && (nativeCounters cfg)
+      nCounters = show $ counterCount cfg
       counterMem = if hasCounters
-                   then  ([ stmt $ "int data_" ++ (bufName cfg) ++ "::ppt_counter_fd[3]"] ++
+                   then  ([ stmt $ "int data_" ++ (bufName cfg) ++ "::ppt_counter_fd["++ nCounters ++ "]"] ++
                           if (nativeCounters cfg)
-                          then [stmt $ "void * data_" ++ (bufName cfg) ++ "::ppt_counter_mmap"]
+                          then [stmt $ "void * data_" ++ (bufName cfg) ++ "::ppt_counter_mmap",
+                                stmt $ "uint64_t data_" ++ (bufName cfg) ++ "::ppt_counter_rcx["++ nCounters ++ "]"]
                           else [])
                    else []
       debugMem = if debugOutput cfg
@@ -296,23 +300,31 @@ moduleSource firstName cfg _ GMCounters  =
         stmt "int prior_fd = -1",
         stmt "if (_ppt_ctrl == nullptr) return",
         blockdecl cfg (PP.text "for (int i = 0 ; i < std::min<int>(_ppt_ctrl->nr_perf_ctrs, 3); i++)"
-                      ) PP.empty [
+                      ) PP.empty ([
             stmt $ ("data_" ++ (bufName cfg) ++ "::ppt_counter_fd[i] = syscall(__NR_perf_event_open, " ++
                     "&_ppt_ctrl->counterdata[i].event_attr, 0, -1, prior_fd, 0);"),
             stmt $ "prior_fd = data_"++(bufName cfg)++"::ppt_counter_fd[0];",
             blockdeclV cfg (PP.text "if (prior_fd < 0)") PP.empty [
                 stmt "_ppt_ctrl->nr_perf_ctrs = 0",
                 stmt $ ("for (int j = i; j >= 0; j--) { close(data_" ++ (bufName cfg) ++
-                        "::ppt_counter_fd[j]); }"),
-                stmt "break;"
+                        "::ppt_counter_fd[j]); data_" ++ (bufName cfg) ++
+                        "::ppt_counter_fd[j] = 0; }"),
+                stmt "return;"
                 ]
-            ]
+            ] ++ (if isNative
+                  then [
+                     stmt ( "data_" ++ (bufName cfg) ++
+                            "::ppt_counter_mmap = mmap(NULL, sysconf(_SC_PAGESIZE), PROT_READ, MAP_SHARED, prior_fd, 0)")
+                      ]
+                  else []))
+
         ],
-    blockdecl cfg (PP.text "void closeCounters()") PP.empty [
+    blockdecl cfg (PP.text "void closeCounters()") PP.empty ([
         stmt "if (_ppt_ctrl == nullptr) return",
         stmt $ ("for (int j = std::min<int>(_ppt_ctrl->nr_perf_ctrs, 3); j >= 0; j--) { close(data_" ++
-                (bufName cfg) ++ "::ppt_counter_fd[j]); }")
-        ]
+                (bufName cfg) ++ "::ppt_counter_fd[j]); data_" ++ (bufName cfg) ++
+                 "::ppt_counter_fd[j] = 0;}")
+        ] ++ if isNative then [ stmt $ "munmap(data_" ++ (bufName cfg) ++ "::ppt_counter_mmap, sysconf(_SC_PAGESIZE))" ] else [])
   ] ++ if isNative
        then [] -- native counters are saved in inline decls.
        else [

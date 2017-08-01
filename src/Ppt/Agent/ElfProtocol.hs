@@ -237,29 +237,111 @@ loadCounter s p verbosity = do
   FMA.free counterName
   return $ res /= (-1)
 
+-- |Returns a pmu ID nr and the name of each PMU.  Then we can start
+-- scanning the pmu prefixes to figure out which events we want.
+findAllPMUs :: IO ([(Int, String)])
+findAllPMUs = do
+  let findPMU i = do
+        res <- [C.block| const char* {
+                   pfm_pmu_info_t pinfo;
+                   memset(&pinfo, 0, sizeof(pinfo));
+                   pinfo.size = sizeof(pinfo);
+                   int ret = pfm_get_pmu_info($(int i), &pinfo);
+                   if (ret != PFM_SUCCESS || !pinfo.is_present)
+                        return NULL;
+                   return pinfo.name;
+                 }|]
+        if nullPtr == res
+        then return Nothing
+        else do str <- FCS.peekCString res
+                return $ Just (fromIntegral i, str)
+      maxPMU = fromIntegral $ [C.pure| int { PFM_PMU_MAX }|]
+  allValues <- mapM findPMU [0..maxPMU]
+  let rawList = catMaybes allValues
+  -- filter out ix86Arch, it's too flaky to use reliably.  We'll keep
+  -- ABI support in for when I can come back to research it better.
+  return $ filter (\(_, n) -> n /= "ix86arch") rawList
+
+-- |Returns whether y is in x.
+strstr :: String -> String -> Bool
+strstr y x = isJust $  (y `L.isPrefixOf`) `L.findIndex` (L.tails x)
+
+findCounter :: String -> String -> IO (Bool)
+findCounter pmu event = do
+  let pmuPfx = pmu ++ "::"
+      pmuLen = length pmuPfx
+      eventPfx = take pmuLen event
+      hasPrefix = strstr "::" event
+  if hasPrefix &&  False == (strstr pmuPfx event)
+  then return False
+  else do
+    counterName <- FCS.newCString (pmu ++ "::" ++ event)
+    res <- [C.block| int { return pfm_find_event($(const char* counterName)); } |]
+    putStrLn ("[findCounter " ++ pmu ++ " " ++ event ++"] looking for " ++ pmu ++ "::" ++ event ++ ": " ++ show res)
+    return $ res >= 0
+
+
+findArchCounter :: String -> IO (Maybe Word32)
+findArchCounter c = do
+  counterName <- FCS.newCString c
+  res <- [C.block| int {
+             int opaque_id = pfm_find_event($(const char* counterName));
+             pfm_event_info_t pinfo;
+             memset(&pinfo, 0, sizeof(pinfo));
+             pinfo.size = sizeof(pinfo);
+             pfm_get_event_info(opaque_id, PFM_OS_PERF_EVENT_EXT, &pinfo);
+             if (pinfo.pmu == PFM_PMU_INTEL_X86_ARCH) {
+                printf("%s is architectural.  code is %lx\n", $(const char* counterName), pinfo.code);
+                switch (pinfo.code) {
+                    /* Intel: Vol 3B, 19.1 */
+                   case 0x003c:  /* UNHALTED_CORE_CYCLES */
+                     return 1 << 30;
+                   case 0x013c: /* UNHALTED_REFERENCE_CYCLES */
+                     return (1 << 30) | 1;
+                   case 0x00c0: /* INSTRUCTIONS_RETIRED */
+                     return (1 << 30) | 2;
+                   case 0x4f2e: /* LLC_REFERENCES */
+                     return (1 << 30) | 3;
+                   case 0x412e: /* LLC_MISSES */
+                     return (1 << 30) | 4;
+                   case 0x00c4: /* BRANCH_INSTRUCTIONS_RETIRED */
+                     return (1 << 30) | 5;
+                   case 0x00c5: /* MISPREDICTED_BRANCH_RETIRED */
+                     return (1 << 30) | 6;
+                   default: break;
+               }
+             }
+             return -1;
+           }|]
+  if res >= 0
+  then return $ Just $ fromIntegral res
+  else return Nothing
 
 -- |As a cheapie, reverse the counter names on the way in and we'll
 -- just use the length as an index var.
 setCounters :: [String] -> C.CUIntPtr -> Int -> IO (Bool)
 setCounters ns shmAddr verbosity = do -- setCounters' ns p 0
--- Plan here: first 'lookup' each one against our list of
--- builtinCounters.  That gets us a list of the ones we don't need to
--- initialize.  Then go through the list, matching Nothing and calling
--- loadCounter on it.
---  bcounters <- 
-  let builtins = map (\_ -> Nothing) ns
+  -- NOTE: architectural counters seem to segfault pretty regularly.  So skip them.
+  pmus <- findAllPMUs
+  putStrLn $ concatMap show pmus
+  
   setCounters' (zip builtins ns) shmAddr 0 0
   where
     setCounters' :: [(Maybe Word32, String)] -> C.CUIntPtr -> Int -> Int -> IO (Bool)
     setCounters' [] _ _ _ = return True
-    setCounters' ((Just n, _):ns) p idx next_rcx = do
+    setCounters' ((Just n, nm):ns) p idx next_rcx = do
       let c_idx = fromIntegral idx
           c_n = fromIntegral n
-      [C.block| void {
+      addr <- [C.block| uintptr_t {
                   struct ppt_control *ctrl = (struct ppt_control*)$(uintptr_t shmAddr);
                   ctrl->counterdata[$(int c_idx)].rcx = $(int c_n);
-        }|]
-      setCounters' ns p (idx + 1) next_rcx
+                  return (uintptr_t) &ctrl->counterdata[$(int c_idx)].event_attr;
+              }|]
+      res <- loadCounter nm addr verbosity
+      if res
+        then setCounters' ns shmAddr (idx+1) next_rcx --(next_rcx + 1)
+        else return False
+--      setCounters' ns p (idx + 1) next_rcx
 
     setCounters' ((Nothing, nm):ns) p idx next_rcx = do
       let c_idx = fromIntegral idx

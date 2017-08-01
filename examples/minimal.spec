@@ -5,6 +5,7 @@ buffer Minimal 512;
 option runtime multithread true;
 option time timespec realtime;
 option debug true;
+option native_counter true;
 
 frame first {
    int a, b, c;
