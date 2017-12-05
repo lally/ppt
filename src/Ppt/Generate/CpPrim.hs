@@ -120,12 +120,20 @@ makeMember cfg (LMember (PCounter (Just 0)) _ _ _ (LKMember frmem side) nm) =
         Nothing -> baseName
         Just (IntBegin _ _) -> baseName ++ "_start"
         Just (IntEnd _ _) -> baseName ++ "_end"
-      saveFn = if nativeCounters cfg
+      saveFn = let args = L.intercalate ", " $ map (\i -> "&" ++ (counterFor i)) $ indices
+                   static_savectrs = blockdecl cfg (PP.text $ "void snapshot_" ++ functionsBaseName ++ "()") PP.empty [
+                     stmt $ "save_counters(" ++ args ++ ")"]
+               in
+               if nativeCounters cfg
                then
                  let labelFor n = "__ppt_" ++ (bufName cfg) ++ "_" ++ nm ++ "_Load_" ++ show (n+1) ++ "_counters"
-                     pfxCond = blockdecl cfg (
-                       PP.text $ "if (data_" ++ (bufName cfg) ++ "::ppt_counter_fd[0] < 1)") PP.empty [
-                         stmt "return"]
+                     pfxConds = [blockdecl cfg (
+                                    PP.text $ "if (_ppt_ctrl == nullptr || data_" ++ (bufName cfg) ++ "::ppt_counter_fd[0] < 1)") PP.empty [
+                                    stmt "return"],
+                                 blockdecl cfg (
+                                    PP.text $ "if ((_ppt_ctrl->client_flags & PERF_CTR_NATIVE_ENABLED) == 0)") PP.empty [
+                                    stmt $ "save_counters(" ++ args ++ ")"]
+                                ]
                      condFor n = blockdecl cfg (PP.text $ "if (data_" ++ (bufName cfg) ++ "::ppt_counter_fd[" ++
                                                 show n ++ "] > 0)") PP.empty [
                        stmt $ "goto " ++ labelFor n
@@ -135,17 +143,15 @@ makeMember cfg (LMember (PCounter (Just 0)) _ _ _ (LKMember frmem side) nm) =
                      loadFor n = [(PP.text $ labelFor n) <> ":",
                                   stmt $ "__asm__ volatile(\"rdpmc\" :  \"=a\" (a), \"=d\" (d) : \"c\" (data_" ++
                                      (bufName cfg) ++ "::ppt_counter_rcx[" ++ show n ++ "]))",
-                                  stmt $ nm ++ " = a | (static_cast<uint64_t>(d) << 32)" ]
+                                  stmt $ (counterFor n) ++ " = a | (static_cast<uint64_t>(d) << 32ULL)" ]
                      revIndices = reverse indices
                  in blockdecl cfg (PP.text $ "void snapshot_" ++ functionsBaseName ++ "()") PP.empty (
-                   pfxCond
-                   : condCat (map condFor $ init revIndices)
+                   pfxConds ++ 
+                   ( condCat (map condFor $ init revIndices)
                    : sfxCond
-                   : (stmt "uint32_t a,d":(concatMap loadFor revIndices)))
+                   : (stmt "uint32_t a,d":(concatMap loadFor revIndices))))
                else
-                 let args = L.intercalate ", " $ map (\i -> "&" ++ (counterFor i)) $ indices
-                 in blockdecl cfg (PP.text $ "void snapshot_" ++ functionsBaseName ++ "()") PP.empty [
-                   stmt $ "save_counters(" ++ args ++ ")"]
+                 static_savectrs
       headers = if nativeCounters cfg then [ "sys/mman.h"] else []
   in MB [saveFn] (dataMember "uint64_t" (nm ++ memSfx)) headers [GMCounters]
 

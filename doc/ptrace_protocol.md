@@ -93,12 +93,14 @@ struct ppt_control {
     uint64_t               data_block_hmem_attached;
     void                  *data_block;           /* initialized by the generated code */
     size_t                 data_block_sz;        /* in elements */
-    uint32_t               nr_perf_ctrs;         /* Valued [0,3] */
-    struct perf_event_attr counterdata[3];
     uint64_t               client_flags;
+    uint32_t               nr_perf_ctrs;         /* valued [0-3], typically, high bit = native enabled */
+    struct perf_counter_entry counterdata[1];
 };
+
 #define CLIENT_FLAG_ATTACHED (1)
 #define CLIENT_FLAG_COUNTERS_SETUP (2)
+#define PERF_CTR_NATIVE_ENABLED (0x80000000)
 ```
 
 The generated code keeps all of its state within this structure.

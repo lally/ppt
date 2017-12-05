@@ -303,8 +303,10 @@ moduleSource firstName cfg _ GMCounters  =
                       ) PP.empty ([
             stmt $ ("data_" ++ (bufName cfg) ++ "::ppt_counter_fd[i] = syscall(__NR_perf_event_open, " ++
                     "&_ppt_ctrl->counterdata[i].event_attr, 0, -1, prior_fd, 0);"),
-            stmt $ "prior_fd = data_"++(bufName cfg)++"::ppt_counter_fd[0];",
-            blockdeclV cfg (PP.text "if (prior_fd < 0)") PP.empty [
+            stmt $ "prior_fd = data_"++(bufName cfg)++"::ppt_counter_fd[0]",
+            blockdeclV cfg (
+                PP.text $ "if (prior_fd < 0 || data_" ++ (bufName cfg) ++ "::ppt_counter_fd[i] < 0)") PP.empty [
+                stmt "perror(\"perf_event_open\")",
                 stmt "_ppt_ctrl->nr_perf_ctrs = 0",
                 stmt $ ("for (int j = i; j >= 0; j--) { close(data_" ++ (bufName cfg) ++
                         "::ppt_counter_fd[j]); data_" ++ (bufName cfg) ++
@@ -313,7 +315,7 @@ moduleSource firstName cfg _ GMCounters  =
                 ]
             ] ++ (if isNative
                   then [
-                     stmt ( "data_" ++ (bufName cfg) ++
+                     stmt ( "if (i == 0) data_" ++ (bufName cfg) ++
                             "::ppt_counter_mmap = mmap(NULL, sysconf(_SC_PAGESIZE), PROT_READ, MAP_SHARED, prior_fd, 0)")
                       ]
                   else []))

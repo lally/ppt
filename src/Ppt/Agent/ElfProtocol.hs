@@ -184,9 +184,13 @@ initCounters = do
 
 data CounterInfo = InvalidCounter
                  | ArchitecturalCounter
+                 | SyntheticCounter -- ^By linux perf subsystem, not a CPU counter
                  | RawCounter
                  deriving (Eq, Show)
--- |Identify the PMU of the counter and return that (if there is one)
+
+-- |Identify the PMU of the counter and return that (if there is one).
+-- Loads the 'perf_event_attr' pointed to by 'p' with data pulled from
+-- libpfm.
 loadCounter :: String -> C.CUIntPtr -> Int -> IO (Bool)
 loadCounter s p verbosity = do
   let verb = fromIntegral verbosity
@@ -203,38 +207,28 @@ loadCounter s p verbosity = do
                 return -1;
             } else {
                 printf("Loaded %s to %p\n", $(const char* counterName), pe);
-                if ($(uint32_t verb) > 1) {
-                   switch(pe->type) {
-                   case PERF_TYPE_HARDWARE: {
-                      printf (" PERF_TYPE_HARDWARE: %llu\n", pe->config);
-                   } break;
-                   case PERF_TYPE_SOFTWARE: {
-                      printf (" PERF_TYPE_SOFTWARE: %llu\n", pe->config);
-                   } break;
-                   case PERF_TYPE_TRACEPOINT: {
-                      printf (" PERF_TYPE_TRACEPOINT: %llu\n", pe->config);
-                   } break;
-                   case PERF_TYPE_HW_CACHE: {
-                      printf (" PERF_TYPE_HW_CACHE: %llu\n", pe->config);
-                   } break;
-                   case PERF_TYPE_RAW: {
-                      printf (" PERF_TYPE_RAW: %llu\n", pe->config);
-                   } break;
-                   case PERF_TYPE_BREAKPOINT: {
-                      printf (" PERF_TYPE_BREAKPOINT: %llu\n", pe->config);
-                   } break;
-                   default:
-                      printf (" (dynamic PMU): %llu\n", pe->config);
-                   }
-                }
             }
             pe->disabled = 0;
             pe->exclude_kernel = 1;
             pe->exclude_hv = 1;
-            pe->read_format = PERF_FORMAT_GROUP;
-            return 0;
+            pe->sample_type = PERF_SAMPLE_READ;
+            pe->read_format = 0; // PERF_FORMAT_GROUP;
+            const char *petype;
+            switch (pe->type) {
+               case PERF_TYPE_HARDWARE: petype = "PERF_TYPE_HARDWARE"; break;
+               case PERF_TYPE_SOFTWARE: petype = "PERF_TYPE_SOFTWARE"; break;
+               case PERF_TYPE_TRACEPOINT: petype = "PERF_TYPE_TRACEPOINT"; break;
+               case PERF_TYPE_HW_CACHE: petype = "PERF_TYPE_HW_CACHE"; break;
+               case PERF_TYPE_RAW: petype = "PERF_TYPE_RAW"; break;
+               case PERF_TYPE_BREAKPOINT: petype = "PERF_TYPE_BREAKPOINT"; break;
+               default:
+                  petype = "(unknown)";
+            }
+            printf("%s: libpfm uses type %s\n", $(const char* counterName), petype);
+            return pe->type;
           } |]
   FMA.free counterName
+
   return $ res /= (-1)
 
 -- |Returns a pmu ID nr and the name of each PMU.  Then we can start
@@ -280,43 +274,6 @@ findCounter pmu event = do
     putStrLn ("[findCounter " ++ pmu ++ " " ++ event ++"] looking for " ++ pmu ++ "::" ++ event ++ ": " ++ show res)
     return $ res >= 0
 
-
-findArchCounter :: String -> IO (Maybe Word32)
-findArchCounter c = do
-  counterName <- FCS.newCString c
-  res <- [C.block| int {
-             int opaque_id = pfm_find_event($(const char* counterName));
-             pfm_event_info_t pinfo;
-             memset(&pinfo, 0, sizeof(pinfo));
-             pinfo.size = sizeof(pinfo);
-             pfm_get_event_info(opaque_id, PFM_OS_PERF_EVENT_EXT, &pinfo);
-             if (pinfo.pmu == PFM_PMU_INTEL_X86_ARCH) {
-                printf("%s is architectural.  code is %lx\n", $(const char* counterName), pinfo.code);
-                switch (pinfo.code) {
-                    /* Intel: Vol 3B, 19.1 */
-                   case 0x003c:  /* UNHALTED_CORE_CYCLES */
-                     return 1 << 30;
-                   case 0x013c: /* UNHALTED_REFERENCE_CYCLES */
-                     return (1 << 30) | 1;
-                   case 0x00c0: /* INSTRUCTIONS_RETIRED */
-                     return (1 << 30) | 2;
-                   case 0x4f2e: /* LLC_REFERENCES */
-                     return (1 << 30) | 3;
-                   case 0x412e: /* LLC_MISSES */
-                     return (1 << 30) | 4;
-                   case 0x00c4: /* BRANCH_INSTRUCTIONS_RETIRED */
-                     return (1 << 30) | 5;
-                   case 0x00c5: /* MISPREDICTED_BRANCH_RETIRED */
-                     return (1 << 30) | 6;
-                   default: break;
-               }
-             }
-             return -1;
-           }|]
-  if res >= 0
-  then return $ Just $ fromIntegral res
-  else return Nothing
-
 -- |As a cheapie, reverse the counter names on the way in and we'll
 -- just use the length as an index var.
 setCounters :: [String] -> C.CUIntPtr -> Int -> IO (Bool)
@@ -324,8 +281,15 @@ setCounters ns shmAddr verbosity = do -- setCounters' ns p 0
   -- NOTE: architectural counters seem to segfault pretty regularly.  So skip them.
   pmus <- findAllPMUs
   putStrLn $ concatMap show pmus
-  
-  setCounters' (zip builtins ns) shmAddr 0 0
+  let candidates = [ (pmu, ctr) | (_, pmu) <- pmus, ctr <- ns ]
+  qualifiedCounterNamesM <- mapM (\(pmu, ctr) -> do
+                                     found <- findCounter pmu ctr
+                                     if found
+                                       then return $ Just (pmu ++ "::" ++ ctr)
+                                       else return Nothing) candidates
+  let qualifiedCounterNames = catMaybes qualifiedCounterNamesM
+  -- Keep the infrastructure to use the arch counters later.
+  setCounters' (zip (repeat Nothing) qualifiedCounterNames) shmAddr 0 0
   where
     setCounters' :: [(Maybe Word32, String)] -> C.CUIntPtr -> Int -> Int -> IO (Bool)
     setCounters' [] _ _ _ = return True
