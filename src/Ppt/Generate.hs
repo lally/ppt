@@ -110,7 +110,13 @@ generateCommand args =
   let opts = splitOptionGroups args
   -- The following should all be in a runEitherT $ do...
   in case opts of
-    Nothing -> putStrLn "ppt generate <usage>"
+    Nothing -> do
+      putStrLn "ppt generate [options] <spec-file>"
+      putStrLn "Options:"
+      putStrLn "  --prefix FILE-PREFIX"
+      putStrLn "  --tag KEY VALUE"
+      putStrLn "  --option OPITON"
+      return ()
     Just (groups, fname) -> do
       let (pfx, r1) = pullGroup "--prefix" filePfx groups
           (tags, r2) = pullGroup "--tag" tagPfx r1

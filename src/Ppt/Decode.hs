@@ -287,8 +287,8 @@ decodeFileToCSVs filename destDir = do
 
 decodeCommand :: [String] -> IO ()
 decodeCommand [] = do
-  putStrLn "usage: ppt decode input_filename [output-dir]"
-  putStrLn "  where output-dir will be generated if unpsecified."
+  putStrLn "usage: ppt decode input_filename [output_dir]"
+  putStrLn "  where output_dir will be generated if unspecified."
 
 decodeCommand (filename:rest) = do
   let outputDir = if length rest < 1

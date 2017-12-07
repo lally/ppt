@@ -1,0 +1,253 @@
+#+TITLE: =ppt= Portable Performance Tool
+#+AUTHOR: Lally Singh
+
+* Purpose
+=ppt= is a performance tracing tool.  You define different types of individual
+frames and =ppt= will generate code to call and link into your executable.
+Then =ppt= will let you attach to your running executable to collect these
+traces.
+
+A frame is essentially a C =struct= that you fill out and save to a circular
+buffer in shared memory, called a =buffer=.  You can add any members you like
+to a frame to record relevant details about the event.  =ppt= also has built-in
+support for using timers and CPU performance counters.
+
+=ppt= prioritizes low overhead first.
+
+When =ppt= isn't attached to a running process, there is no buffer and saving a
+frame is a no-op.
+
+
+* Why another performance tool?
+** Why not dtrace
+   =dtrace= is an excellent tool.  It provides straightforward ways to
+   instrument an unaltered binary (and you can alter the program for even
+   more).  However, it has two major drawbacks:
+   - Attachment time: the more instrumentation you want on the execution, the
+     longer it takes to attach to the process.  This can leave the process
+     unresponsive for longer than you may like.
+   - Statistics and histograms only: no access to raw data.  Instead, you can
+     get histograms of collected data (or simple statistics).  But the
+     underlying raw data is captured only (AFAIK) with a relatively expensive
+     print statement.
+** Why not gprof?
+   =gprof= is a good tool.  It provides a simple way to get a rough idea of
+   where your CPU time is taken.  But it sacrifices a few things to get there:
+   - # It chooses where the overhead goes -- =gprof= instruments on a function
+     level, which biases towards overreporting small function overhead (because
+     as a percentage, =gprof=-induced overhead is higher).
+   - # You don't get as much detail.  =gprof= gives you basic statistics on a
+     program execution, but much detail can be hidden behind those statistics.
+     For example, the program performance could be dominated by some
+     infrequent - but very expensive - situation.
+
+  In contrast, =ppt='s data gives you the whole distribution (instead of
+  statistics) for your data, and you choose what to instrument, when in the
+  program execution to do so, and thusly, what runtime overhead it incurs.  The
+  transfer protocol for sending a frame from the process under observation to
+  =ppt= for recording is a pair of memory barriers, a copy of the data, and
+  some additional writes to the sequence number.
+
+
+* Can it lose data?
+  Yes.  =ppt= /does not/ let the writer (the process being instrumented) wait
+  for the reader (=ppt=).  If the writer suddenly increases its write rate
+  significantly, we don't want to slow it down to let the reader catch up.  Nor
+  do we want the writer to be exposed to scheduler latencies experienced by the
+  reader.  Instead, =ppt= provides a way to detect what data is missing -- by
+  sequence numbers.
+
+  Each frame in a =ppt= buffer has a sequence number, that monotonically
+  increases.  If =ppt= doesn't capture some frames in time, the captured frames
+  will have jumps in their sequence numbers.
+
+* How do I use it?
+  Roughly:
+  1. Describe the frames you want to collect in a .spec file.
+  2. Generate source for those frames,
+  3. Add instrumentation to your program to fill in frames and save them to the
+     buffer.
+  4. Attach to the running program to collect your data.
+  5. Convert the collected data to CSV for analysis.
+
+  It's a lot of steps, but it has a few advantages:
+  - During your program's run, PPT isn't doing anything more than saving a
+    shared memory buffer to disk periodically.
+  - You get lots of control in your instrumentation.
+  - You get raw data at the end, for deeper analysis.
+
+** Describing the Frames
+   #+begin_src filename:minimal.spec
+emit C++;
+
+buffer Minimal 512;
+
+option time timespec realtime;
+
+frame first {
+   int a, b, c;
+   interval time duration;
+   interval counter events;
+}
+
+frame second {
+   interval counter foos;
+}
+   #+end_src
+** Generating Source for Frames
+#+begin_src sh
+$ ppt generate ./minimal.spec
+#+end_src
+** Instrumenting your Program
+#+begin_src sh
+minimal-client: ppt-Minimal.hh ppt-Minimal.cc minimal-client.cc
+	g++ -o minimal-client minimal-client.cc ppt-Minimal.cc
+#+end_src
+
+#+begin_src cpp
+#include "ppt-Minimal.hh"
+
+int main() {
+   int acount = 0;
+   while (1) {
+       ppt::first record;
+       // collect timestamp of when this starts.
+       record.snapshot_duration_start();
+       // snapshot performance counters
+       record.snapshot_events_start();
+       // do anything you want here.
+       record.a = 0xaaaa0000 + acount++;
+       record.b = acount - record.a;
+       record.c = 0xcccccccc;
+       // snapshot performance counters.
+       record.snapshot_events_end();
+       // snapshot timestamp.
+       record.snapshot_duration_end();
+       // save to buffer.
+       record.save();
+   }
+   return 0;
+}
+#+end_src
+** Attaching to your Program
+#+begin_src sh
+$ ./minimal-client &
+$ ppt attach -p $(pgrep minimal-client) -o output.bin
+#+end_src
+** Converting Data for Analysis
+#+begin_src sh
+$ ppt convert output.bin 
+$ ls output.bin_output
+minimal.csv
+#+end_src
+
+* How do I use it effectively?
+  =ppt= has two phases of your program's lifecycle where it becomes quite
+  handy:
+  1. During development, it provides good feedback on the implementation's
+     performance characteristics.  This is very useful for:
+     - Determining performance trade-offs.
+     - Improving performance of the system
+  2. During operations, it provides a good way to monitor the application.
+     - Significantly faster to log than text
+     - Easier to analyze/plot
+     Note that more operational support is planned.  Once I get around to
+     learning (n)curses.
+
+** When optimizing my program
+   First, you'll clearly have to figure out what you want to optimize.  The
+   latency in response to an event?  The time through the main loop?  Time to
+   complete N items of work?
+   - Sort that out and come back.  We'll wait.
+   - Got it?  Good.  Here we go:
+
+*** What to instrument
+    First figure out what you're measuring:
+    - The /performance metric/: the number you want to make better.  This can
+      be, for example: frame rate (go higher!), latency (go lower), or
+      throughput (higher again!).  You don't have to make it time-based.  If
+      you want to measure how many I/Os you do instead, you can do that. 
+    - The /unit/ of work.  What's a single measurement look like?  For frame
+      rates, this would be the time for a single frame.  For latency, the a
+      single time interval.  For throughput, the time for a single item (or if
+      batching, two numbers: number in batch and time taken for batch).
+ 
+    Now, here's what you want to instrument:
+    - The /load/ on your program for this unit.  The event you processed, some
+      characteristic of how much data you processed in that iteration of your
+      main loop, or the type/parameters of the item processed.
+    - The /effort/ expended on this unit.  This is where you do most of your
+      instrumentation.  Things to record:
+      - How many iterations of each loop you run
+      - Which major branches (if conditions) you take
+      - Key performance counters
+        - Mostly we're talking about cache misses
+      - Synchronization overhead
+        - How long you spent waiting for a mutex, for example.
+
+   Generally, you can start off with a rough breakdown of where you're spending
+   your effort, and drill down with more instrumentation once you see where the
+   effort's really going.
+
+*** Setting up a benchmark
+    When optimizing a program, you can't be sure that you've actually improved
+    the performance without a /benchmark/ for comparison.  This doesn't have to
+    be hard, it can be setup like a unit test.
+    - Take some input that's characteristic of reality.
+    - Run it through your code.
+    - Collect results.
+
+   Run before/after each change you want to compare, and you can tell if you're
+   doing better.  As to how many times you want to run it: generally run it a
+   bunch of times to get clean data, then investigate why it varies.
+
+   Then repeatedly go back and change your instrumentation, and re-benchmark
+   until you can predict the performance of slightly different code or input
+   load.  Now that you have a real mapping between your load, your
+   implementation, and its performance, you can start to alter the code to
+   perform more like how you want it.
+
+*** Data Analysis
+    =ppt decode= emits CSV files, one per frame type.  You can use Jupyter, R,
+    or Excel to great success with that data.  Yes, other output formats are
+    good too, I just haven't had a use case to write more. CSV just keeps
+    working, no matter how it kinda sucks.
+
+** When monitoring a program
+   This intended use case for =ppt= doesn't have the desired support in =ppt=
+   yet.  Generally, you can define other buffers for monitoring, and in the
+   future, =ppt= should have a monitor mode that presents a live-decoded
+   version of the data in that buffer.
+
+   The essential issue with this is that we need to present the monitor data in
+   a way that scales up easily.  This may just be ppt emitting JSON on =stdout=.
+
+* Limitations
+  - =ppt= is only maintained for x86_64 Linux.  Not very portable, I know.  It
+  used to be used mostly on Solaris, which doesn't really count.
+
+  - =ppt= attaches to a running process via =ptrace(2)=, which means that you
+    can't be debugging the process at the same time.  As =ppt= only uses
+    =ptrace(2)= when attaching and detaching, you can start the process, have
+    ppt attach to it, and then have =gdb= attach to it.  It should work, but
+    isn't exactly convenient.
+
+  - C++ code gen only.  It's what I use, so it's what I developed this
+    for. As long as the generated code follows the same format and protocol,
+    and that we can emit the same symbols into the executable, other languages
+    should be straightforward.
+    - Back when this was used on Solaris, the generator was C based.  It's not
+      hard to bring it back, if it was useful.
+    - VM-based languages are probably not as straight forward.
+
+  - The data transfer between =ppt= and the instrumented process is /lossy/.
+    - You can detect loss by watching sequence numbers in the frames.
+    - You can increase the buffer size to reduce loss.  But you incur more
+      cache misses that way.  OTOH, larger buffers means =ppt= doesn't have to
+      wake up as often to get data.  If you have a lot of cache churn anyways,
+      you may prefer to keep that CPU core idle more often.
+      - Perhaps non-temporal stores could be used in the future to mitigate
+        this.
+    - This is the price to pay to prevent having the process-under-observation
+      block when the reader falls behind.
+      

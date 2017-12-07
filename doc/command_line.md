@@ -3,14 +3,17 @@ PPT Command Line Interface
 
 # Basic Commands
 `generate` -- Generate source code from an input .spec.
-`record` -- Attach to a process and save data from its buffer.
-`convert` -- Convert a recording to a readable form.
-`query` -- List properties from a running process (or executable?)
+`attach` -- Attach to a process and save data from its buffer.
+`decode` -- Convert a recording to a readable form.
 
 ## Generate
 - Needs the spec file and parameters for filename generation.
 ```
-ppt generate [--prefix <pfx>] [--tag <key> <value>] [--option <options...>] filename
+ppt generate [options] <spec-file>
+Options:
+  --prefix FILE-PREFIX
+  --tag KEY VALUE
+  --option OPITON
 ```
 
 - Also needs tags or other options.
@@ -18,10 +21,21 @@ ppt generate [--prefix <pfx>] [--tag <key> <value>] [--option <options...>] file
 - `--option [option syntax]`
 - They're all saved into the JSON.
 
-## Record
+## Attach
 - Needs a pid and an output file.
 ```
-ppt record -p <pid> -b <buffer> -o <filename> [-s bufsize]
+ppt attach
+  -p pid              --pid=pid                   Pid to attach to. (required)
+  -b buffer name      --buffer=buffer name        Name of buffer to read.  (required)
+  -l                  --list-buffers              List buffers in process.
+  -h, -?              --help                      Print help.
+  -d description      --desc=description          A comment on the collection session.
+  -D descriptionfile  --descfile=descriptionfile  File containing comment on the collection session.
+  -t delta-hours      --time-offset=delta-hours   Apply this change to the timestamps on this machine.
+  -o output-file      --output-file=output-file   Output file to save buffer contents. (required)
+  -c counter-name     --counter=counter-name      Comma-separated list of performance counters to use
+  -v                  --verbose                   Verbose output.
+
 ```
 
 - V1 won't be a .tar file.  It requires spares file support (and a
@@ -34,12 +48,13 @@ ppt record -p <pid> -b <buffer> -o <filename> [-s bufsize]
   the json (4 bytes, little endian), then the JSON, then the data from
   the struct.
 
-## Convert
-- Needs a filename, format, and output name.
+## Decode
+- Needs a filename.  Puts out a directory with one CSV file per buffer type.
+
 ```
-ppt convert -f <filename> -t <format> -o <result>
+ppt decode input_filename [output-dir]
+  where output-dir will be generated if unpsecified.
 ```
-    Perhaps I can infer the result from the output filename?
 
 
 ## Query

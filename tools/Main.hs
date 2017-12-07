@@ -12,12 +12,11 @@ import System.Environment (getArgs)
  -}
 
 showHelp = do
-  putStrLn "ppt help -- This message"
-  putStrLn "ppt generate [options] <filename> -- Generate static instrumentation"
-  putStrLn "    <filename> - The instrumentation spec"
-  putStrLn "    options: "
-  putStrLn "      -o name --- file base name"
-  putStrLn "ppt retrieve <filename> -- Extract generated instrumentation into current directory."
+  putStrLn "ppt -- This message"
+  putStrLn "ppt generate -- generate instrumentation source code from specification."
+  putStrLn "ppt attach -- attach to a running process to collect instrumentation data into a binary file."
+  putStrLn "ppt decode -- convert a collected  binary file to readable text."
+  putStrLn "Each subcommand has its own help"
 
 runCommand :: [String] -> IO ()
 runCommand args = do
