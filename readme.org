@@ -33,10 +33,10 @@ frame is a no-op.
 ** Why not gprof?
    =gprof= is a good tool.  It provides a simple way to get a rough idea of
    where your CPU time is taken.  But it sacrifices a few things to get there:
-   - # It chooses where the overhead goes -- =gprof= instruments on a function
+   - It chooses where the overhead goes -- =gprof= instruments on a function
      level, which biases towards overreporting small function overhead (because
      as a percentage, =gprof=-induced overhead is higher).
-   - # You don't get as much detail.  =gprof= gives you basic statistics on a
+   - You don't get as much detail.  =gprof= gives you basic statistics on a
      program execution, but much detail can be hidden behind those statistics.
      For example, the program performance could be dominated by some
      infrequent - but very expensive - situation.
@@ -297,8 +297,7 @@ minimal.csv
     for. As long as the generated code follows the same format and protocol,
     and that we can emit the same symbols into the executable, other languages
     should be straightforward.
-    - Back when this was used on Solaris, the generator was C based.  It's not
-      hard to bring it back, if it was useful.
+    - Back when this was used on Solaris, the generator was C based.  It's not hard to bring it back, if it was useful.
     - VM-based languages are probably not as straight forward.
 
   - The data transfer between =ppt= and the instrumented process is /lossy/.
@@ -307,8 +306,6 @@ minimal.csv
       cache misses that way.  OTOH, larger buffers means =ppt= doesn't have to
       wake up as often to get data.  If you have a lot of cache churn anyways,
       you may prefer to keep that CPU core idle more often.
-      - Perhaps non-temporal stores could be used in the future to mitigate
-        this.
-    - This is the price to pay to prevent having the process-under-observation
-      block when the reader falls behind.
+      - Perhaps non-temporal stores could be used in the future to mitigate this.
+    - This is the price to pay to prevent having the process-under-observation block when the reader falls behind.
       
