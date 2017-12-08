@@ -123,24 +123,8 @@ $ ppt generate ./minimal.spec
 #+end_src
    Will generate source with this public API:
 #+begin_src cpp
-namespace ppt {
-namespace Minimal {
-class first;
-extern "C" int _ppt_hmem_Minimal;
-struct data_Minimal {
-    static first * ppt_buf;
-    static int     ppt_bufsz;
-    static int     ppt_offset;
-    static int     ppt_counter_fd[3];
-};
-bool try_attach();
-class first;
-int nextIndex();
-void save_counters(uint64_t*,uint64_t*,uint64_t*);
+namespace ppt { namespace Minimal {
 class first {
-private:
-    int __ppt_seqno;
-    int __ppt_type;
 public:
     struct timespec duration_start;
     struct timespec duration_end;
@@ -153,9 +137,7 @@ public:
     int a= 0;
     int b= 0;
     int c= 0;
-private:
-    int __ppt_seqno_back;
-public:
+
     void save();
     void snapshot_duration_start();
     void snapshot_duration_end();
@@ -170,7 +152,7 @@ public:
     uint64_t foos_1_end= 0;
     uint64_t foos_2_start= 0;
     uint64_t foos_2_end= 0;
-public:
+
     void save();
     void snapshot_foos_start();
     void snapshot_foos_end();
