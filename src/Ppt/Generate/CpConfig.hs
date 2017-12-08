@@ -32,24 +32,24 @@ data OutputCfg = OutputCfg { timeType :: String -- ^Decltype of time vars
                            }
 
 -- | Returns (sourceSuffix, headerSuffix, filePrefix, namespace, nativeCounters) from an array of EOption
-cppOpts :: [EOption] -> (String, String, String, [String], Bool, Bool)
-cppOpts opts =
+cppOpts :: EBuffer -> [EOption] -> (String, String, String, [String], Bool, Bool)
+cppOpts buf opts =
   let checkNative (ENativeCounter b) = b
       checkNative _ = False
       checkDebug (EDebug b) = b
       checkDebug _ = False
       native = any checkNative opts
       debug = any checkDebug opts
-  in (".cc", ".hh", "ppt-", ["ppt"], native, debug)
+  in (".cc", ".hh", "ppt-", ["ppt", ebName buf], native, debug)
 
 makeOutCfg :: EmitOptions -> [FrameLayout] -> OutputCfg
 makeOutCfg e@(EmitOptions b _ ETimeVal (ERuntime mt) _ eOpts) flayouts=
-  let (ssfx, hsfx, fpfx, ns, native, debug) = cppOpts eOpts
+  let (ssfx, hsfx, fpfx, ns, native, debug) = cppOpts b eOpts
   in (OutputCfg "struct timeval" "time.h" (\var -> PP.text $ "time(&" ++ var ++ ")") 4 True mt
    (ebName b) ssfx hsfx fpfx ns e flayouts native 3 debug)
 
 makeOutCfg e@(EmitOptions b _ (ETimeSpec src) (ERuntime mt) _ eOpts) flayouts =
-  let (ssfx, hsfx, fpfx, ns, native, debug) = cppOpts eOpts
+  let (ssfx, hsfx, fpfx, ns, native, debug) = cppOpts b eOpts
       clock = case src of
         ETimeClockRealtime ->         "CLOCK_REALTIME"
         ETimeClockRealtimeCoarse ->   "CLOCK_REALTIME_COARSE"

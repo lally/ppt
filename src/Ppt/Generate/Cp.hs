@@ -184,7 +184,8 @@ modDecls cfg firstName mods =
                                     dataDecl cfg firstName mods,
                                     PP.text "bool try_attach();",
                                     docConcat ["class ", firstName, ";"],
-                                    docConcatSp ["int", "nextIndex();"]]
+                                    docConcatSp ["int", "nextIndex();"],
+                                    PP.text ""]
                       GMCounters ->
                         let args = L.intercalate "," $ take (counterCount cfg) $ repeat "uint64_t*"
                         in PP.vcat [ PP.text $ "void save_counters(" ++ args ++ ");" ]

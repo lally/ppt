@@ -94,9 +94,88 @@ frame second {
    interval counter foos;
 }
    #+end_src
+   See the [[doc/buffer_syntax.md][Buffer Syntax Reference]] for details.
+
+*** Performance Counters
+    Notice above that you can use the =counter= type.  Its recorded value is a
+    =uint64_t=, but the actual counter used is unspecified.  When attaching,
+    use the =-c= flag to specify which actual counters to use.
+
+    The counter names are as-specified by =libpfm4=.  You can use the
+    =showevtinfo= command from that distribution to list the (many) counters
+    available on your machine.  Some highlights:
+
+    | Counter               | Description                                                                                                                                                                    |
+    |-----------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+    | INSTRUCTION_RETIRED   | count the number of instructions at retirement. For instructions that consists of multiple micro-ops, this event counts the retirement of the last micro-op of the instruction |
+    | LLC_MISSES            | count each cache miss condition for references to the last level cache. The event count may include speculation, but excludes cache line fills due to hardware prefetch        |
+    | DTLB_LOAD_MISSES      | DTLB Load misses.  See all modifiers in =showevtinfo= for details.                                                                                                             |
+    | ITLB_MISSES           | Instruction TLB misses.                                                                                                                                                        |
+    | L1-DCACHE-LOAD-MISSES | L1 data cache load misses.                                                                                                                                                     |
+    | L1-ICACHE-LOAD-MISSES | L1 instruction cache misses                                                                                                                                                    |
+
+    Many, many more are available, but =showevtinfo= does the job of explaining
+    what's counters you can use much better than we can.
+
 ** Generating Source for Frames
 #+begin_src sh
 $ ppt generate ./minimal.spec
+#+end_src
+   Will generate source with this public API:
+#+begin_src cpp
+namespace ppt {
+namespace Minimal {
+class first;
+extern "C" int _ppt_hmem_Minimal;
+struct data_Minimal {
+    static first * ppt_buf;
+    static int     ppt_bufsz;
+    static int     ppt_offset;
+    static int     ppt_counter_fd[3];
+};
+bool try_attach();
+class first;
+int nextIndex();
+void save_counters(uint64_t*,uint64_t*,uint64_t*);
+class first {
+private:
+    int __ppt_seqno;
+    int __ppt_type;
+public:
+    struct timespec duration_start;
+    struct timespec duration_end;
+    uint64_t events_0_start= 0;
+    uint64_t events_0_end= 0;
+    uint64_t events_1_start= 0;
+    uint64_t events_1_end= 0;
+    uint64_t events_2_start= 0;
+    uint64_t events_2_end= 0;
+    int a= 0;
+    int b= 0;
+    int c= 0;
+private:
+    int __ppt_seqno_back;
+public:
+    void save();
+    void snapshot_duration_start();
+    void snapshot_duration_end();
+    void snapshot_events_start();
+    void snapshot_events_end();
+};
+class second {
+public:
+    uint64_t foos_0_start= 0;
+    uint64_t foos_0_end= 0;
+    uint64_t foos_1_start= 0;
+    uint64_t foos_1_end= 0;
+    uint64_t foos_2_start= 0;
+    uint64_t foos_2_end= 0;
+public:
+    void save();
+    void snapshot_foos_start();
+    void snapshot_foos_end();
+};
+}} // namespace ppt::Minimal
 #+end_src
 ** Instrumenting your Program
 #+begin_src sh
