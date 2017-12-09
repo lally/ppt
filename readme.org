@@ -339,7 +339,9 @@ minimal.csv
 
 * Limitations
   - =ppt= is only maintained for x86_64 Linux.  Not very portable, I know.  It
-  used to be used mostly on Solaris, which doesn't really count.
+    used to be used mostly on Solaris, which doesn't really count.  If anyone
+    asks why I still call it portable, I do almost all the development for it
+    while on public transportation.
 
   - =ppt= attaches to a running process via =ptrace(2)=, which means that you
     can't be debugging the process at the same time.  As =ppt= only uses
