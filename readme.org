@@ -117,6 +117,15 @@ frame second {
     Many, many more are available, but =showevtinfo= does the job of explaining
     what's counters you can use much better than we can.
 
+    =ppt= allocates enough space for 3 counters' worth of data in each
+    =counter= member of a frame.  Twice that for =interval counter=.  You
+    specify which counters you want on the command line in =ppt attach=.  You
+    can attach to the same process several times (sequentially) with different
+    counters to get more than 3.
+
+    The current implementation will use a system call to read the counters in
+    the generated code. Please beware of the performance impact of measurement.  
+
 ** Generating Source for Frames
 #+begin_src sh
 $ ppt generate ./minimal.spec
@@ -159,6 +168,22 @@ public:
 };
 }} // namespace ppt::Minimal
 #+end_src
+
+   There are additional members saved in each =class= that =ppt= uses
+   internally.  Check out the generated code for details.
+
+   Generally:
+   - For simple scalar frame members, you should see a matching =class= member
+     of the same name and type.  Directly assign to it.
+   - For =time= members, a method is provided to save the current time, called
+     =snapshot_MEMBER()=.
+   - Same for =counter= members, only that they're saving to 3 members at a
+     time.
+   - For =interval= types, =ppt= adds a  =_start= and =_end= suffix to
+     distinguish members for the start and end of the interval.
+   - When it's done filling in the frame, your code should call =save()= to
+     make it available for an attached =ppt= process to capture.
+
 ** Instrumenting your Program
 #+begin_src sh
 minimal-client: ppt-Minimal.hh ppt-Minimal.cc minimal-client.cc
@@ -171,12 +196,13 @@ minimal-client: ppt-Minimal.hh ppt-Minimal.cc minimal-client.cc
 int main() {
    int acount = 0;
    while (1) {
-       ppt::first record;
+       ppt::Minimal::first record;
        // collect timestamp of when this starts.
        record.snapshot_duration_start();
        // snapshot performance counters
        record.snapshot_events_start();
        // do anything you want here.
+       // these are meaningless.
        record.a = 0xaaaa0000 + acount++;
        record.b = acount - record.a;
        record.c = 0xcccccccc;
@@ -190,6 +216,34 @@ int main() {
    return 0;
 }
 #+end_src
+
+   As you can tell, Make an instance of the frame type you want, fill it in,
+   and then =save()= it.  You can reuse it if you want.  The members are
+   directly accessible, if you want to use them or optimize you usage.
+
+   For example, if you have several consecutive events of the same type,
+   perhaps you don't want to pay the overhead of repeating
+   =snapshot_duration_start()= and =snapshot_duration_end()= calls.  You can
+   simply call one of them, and copy one member over to the other:
+#+begin_src cpp
+   ppt::Minimal::first record;
+   bool first = true;
+   while (1) {
+      if (first) {
+         record.snapshot_duration_end();
+         first = false;
+      } else {
+         record.duration_start = record.duration_end();
+      }
+      // .. same innards as above.
+      record.snapshot_duration_end();
+      record.save();
+  }
+#+end_src
+
+  It's a bit more tedious, but you can do the same for the counters, but you
+  may end up with a frame of distorted data if you detach and reattach (with
+  different counters).
 ** Attaching to your Program
 #+begin_src sh
 $ ./minimal-client &
@@ -300,6 +354,11 @@ minimal.csv
     - Back when this was used on Solaris, the generator was C based.  It's not hard to bring it back, if it was useful.
     - VM-based languages are probably not as straight forward.
 
+  - =save()= checks to see if a =ppt= process is attached or has just
+    detached.  In that case, it will take a few system calls to setup / tear
+    down the internal buffering and performance counter measurement apparatus.
+    See the generated code (it's readable!) for details.
+
   - The data transfer between =ppt= and the instrumented process is /lossy/.
     - You can detect loss by watching sequence numbers in the frames.
     - You can increase the buffer size to reduce loss.  But you incur more
@@ -309,3 +368,10 @@ minimal.csv
       - Perhaps non-temporal stores could be used in the future to mitigate this.
     - This is the price to pay to prevent having the process-under-observation block when the reader falls behind.
       
+  - Performance counters are limited to 3 at a time, and require a system call
+    per use.  There is /experimental/ code to avoid the system call interface
+    if the counters are /architectural/, and could be read with =rdpmc=
+    directly. 
+    - By /experimental/, I mean that it does what I think it's supposed to, but
+      still seems to crash the process a lot.  Suggestions, pull requests,
+      etc., more than welcome.
