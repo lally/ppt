@@ -191,49 +191,49 @@ minimal-client: ppt-Minimal.hh ppt-Minimal.cc minimal-client.cc
 #+end_src
 
 #+begin_src cpp
-#include "ppt-Minimal.hh"
+  #include "ppt-Minimal.hh"
 
-int main() {
-   int acount = 0;
-   while (1) {
-       ppt::Minimal::first record;
-       // collect timestamp of when this starts.
-       record.snapshot_duration_start();
-       // snapshot performance counters
-       record.snapshot_events_start();
-       // do anything you want here.
-       // these are meaningless.
-       record.a = 0xaaaa0000 + acount++;
-       record.b = acount - record.a;
-       record.c = 0xcccccccc;
-       // snapshot performance counters.
-       record.snapshot_events_end();
-       // snapshot timestamp.
-       record.snapshot_duration_end();
-       // save to buffer.
-       record.save();
-   }
-   return 0;
-}
+  int main() {
+     int acount = 0;
+     while (1) {
+         ppt::Minimal::first record;
+         // collect timestamp of when this starts.
+         record.snapshot_duration_start();
+         // snapshot performance counters
+         record.snapshot_events_start();
+         // Do anything you want here.  For example, saving relevant parts of
+         // input, loop counts, etc.
+         record.a = 0xaaaa0000 + acount++;
+         record.b = acount - record.a;
+         record.c = 0xcccccccc;
+         // snapshot performance counters.
+         record.snapshot_events_end();
+         // snapshot timestamp.
+         record.snapshot_duration_end();
+         // save to buffer.
+         record.save();
+     }
+     return 0;
+  }
 #+end_src
 
-   As you can tell, Make an instance of the frame type you want, fill it in,
-   and then =save()= it.  You can reuse it if you want.  The members are
-   directly accessible, if you want to use them or optimize you usage.
+   Roughly: make an instance of the frame type you want, fill it in, and then
+   =save()= it.  You can reuse the instance across =save()= calls.  The members
+   are directly accessible.
 
-   For example, if you have several consecutive events of the same type,
-   perhaps you don't want to pay the overhead of repeating
-   =snapshot_duration_start()= and =snapshot_duration_end()= calls.  You can
-   simply call one of them, and copy one member over to the other:
+   For example, if you're processing a batch of the events, you may not want to
+   pay the overhead of repeating =snapshot_duration_start()= and
+   =snapshot_duration_end()= calls.  You can simply call one of them, and copy the
+   member over to the other:
 #+begin_src cpp
    ppt::Minimal::first record;
    bool first = true;
    while (1) {
       if (first) {
-         record.snapshot_duration_end();
+         record.snapshot_duration_start();
          first = false;
       } else {
-         record.duration_start = record.duration_end();
+         record.duration_start = record.duration_end;
       }
       // .. same innards as above.
       record.snapshot_duration_end();
@@ -241,9 +241,9 @@ int main() {
   }
 #+end_src
 
-  It's a bit more tedious, but you can do the same for the counters, but you
-  may end up with a frame of distorted data if you detach and reattach (with
-  different counters).
+   You can do the same for the counters, but you may end up with a frame of
+   distorted data if you detach and reattach (with different counters).
+
 ** Attaching to your Program
 #+begin_src sh
 $ ./minimal-client &
