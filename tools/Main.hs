@@ -5,8 +5,8 @@ import qualified Ppt.Generate as Gen
 import qualified Ppt.Decode as Decode
 import System.Environment (getArgs)
 
-{- Driver program for pt
-   ---------------------
+{- Driver program for ppt
+   ----------------------
 
    Implementation of the command-line parser and front-end as a whole.
  -}
@@ -30,6 +30,5 @@ runCommand args = do
       otherwise -> showHelp
 
 main = do
-  -- TODO: Look at the command first.
   args <- getArgs
   runCommand args
