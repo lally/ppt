@@ -17,12 +17,11 @@ support for using timers and CPU performance counters.
 When =ppt= isn't attached to a running process, there is no buffer and saving a
 frame is a no-op.
 
-
 * Why another performance tool?
-** Why not dtrace
-   =dtrace= is an excellent tool.  It provides straightforward ways to
-   instrument an unaltered binary (and you can alter the program for even
-   more).  However, it has two major drawbacks:
+** Why not dtrace or gprof?
+   =dtrace= is an excellent tool.  It instruments unaltered binaries using
+   several built-in "providers", and you can alter the program to give =dtrace=
+   even more data.  But it has two drawbacks:
    - Attachment time: the more instrumentation you want on the execution, the
      longer it takes to attach to the process.  This can leave the process
      unresponsive for longer than you may like.
@@ -30,7 +29,7 @@ frame is a no-op.
      get histograms of collected data (or simple statistics).  But the
      underlying raw data is captured only (AFAIK) with a relatively expensive
      print statement.
-** Why not gprof?
+
    =gprof= is a good tool.  It provides a simple way to get a rough idea of
    where your CPU time is taken.  But it sacrifices a few things to get there:
    - It chooses where the overhead goes -- =gprof= instruments on a function
@@ -41,21 +40,27 @@ frame is a no-op.
      For example, the program performance could be dominated by some
      infrequent - but very expensive - situation.
 
-  In contrast, =ppt='s data gives you the whole distribution (instead of
-  statistics) for your data, and you choose what to instrument, when in the
-  program execution to do so, and thusly, what runtime overhead it incurs.  The
-  transfer protocol for sending a frame from the process under observation to
-  =ppt= for recording is a pair of memory barriers, a copy of the data, and
-  some additional writes to the sequence number.
+** Why =ppt=? Get everything you want, how you want it.
+   In contrast, =ppt='s data gives you the whole distribution (instead of
+   statistics) for your data, and you choose what and when to instrument in the
+   program's execution.
 
+   The transfer protocol for sending a frame from the process under observation
+   to =ppt= for recording is a pair of memory barriers, a copy of the data, and
+   some additional writes to the sequence number.
+
+** Use =ppt= for regression analysis.
+   The best use-case for =ppt= is for regression analysis of state or inputs to
+   performance values.  Embed input values, loop counts, and whatever else you
+   want (add more than you think you'll need, the instrumentation's cheap) and
+   measure what matters.  The resulting records will directly contain cause and
+   effect.
 
 * Can it lose data?
-  Yes.  =ppt= /does not/ let the writer (the process being instrumented) wait
-  for the reader (=ppt=).  If the writer suddenly increases its write rate
-  significantly, we don't want to slow it down to let the reader catch up.  Nor
-  do we want the writer to be exposed to scheduler latencies experienced by the
-  reader.  Instead, =ppt= provides a way to detect what data is missing -- by
-  sequence numbers.
+  Yes. This is a flow-control policy.  =ppt= /does not/ let the writer (the
+  process being instrumented) wait for the reader (=ppt=) to catch up.
+  Instead, some data will be overwritten in the shared buffer before it's read
+  by =ppt= and saved to disk.  
 
   Each frame in a =ppt= buffer has a sequence number, that monotonically
   increases.  If =ppt= doesn't capture some frames in time, the captured frames
