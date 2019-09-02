@@ -3,7 +3,6 @@
 
 module Ppt.Agent.ElfProtocol where
 import Control.Concurrent
-import Control.Monad.Trans.Either
 import Control.Exception (handle, displayException)
 import Control.Exception.Base
 import Data.Aeson

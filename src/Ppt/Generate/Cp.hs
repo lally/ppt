@@ -6,6 +6,7 @@ import Ppt.Frame.Layout
 import Ppt.Generate.CpConfig
 import Ppt.Generate.CpPrim
 
+import Prelude hiding ((<>))
 import Control.Exception (throw, NoMethodError(..))
 import Text.PrettyPrint ((<>),(<+>))
 import Data.Aeson (encode)

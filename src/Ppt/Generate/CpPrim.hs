@@ -3,11 +3,11 @@ module Ppt.Generate.CpPrim where
 import Ppt.Frame.ParsedRep
 import Ppt.Frame.Layout
 
+import Prelude hiding ((<>))
 import Text.PrettyPrint ((<>),(<+>))
 
 import Ppt.Generate.CpConfig
 import qualified Data.List as L
-
 import qualified Text.PrettyPrint as PP
 
 --

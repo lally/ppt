@@ -4,7 +4,6 @@ module Ppt.Frame.Parser where -- (parseFile, compileFrame) where
 import Control.Exception                      (handle)
 import Control.Lens                           hiding (element, noneOf)
 import Control.Monad
-import Control.Monad.Trans.Either
 import Data.Aeson                             (decode, encode)
 import Data.ByteString.Lazy.Char8             (pack, unpack)
 import Data.List

@@ -1,7 +1,7 @@
 # For more information, see: http://docs.haskellstack.org/en/stable/yaml_configuration.html
 
 # Specifies the GHC version and set of packages available (e.g., lts-3.5, nightly-2015-09-21, ghc-7.10.2)
-resolver: lts-3.6
+resolver: lts-14.3
 
 # Local packages, usually specified by relative directory name
 packages:
@@ -11,7 +11,7 @@ packages:
 extra-deps: [ 
   elf-0.27
 , type-level-0.3.0
-, inline-c-0.5.5.9
+, inline-c-0.8.0.1
 , lens-tutorial-1.0.2
 , spool-0.1
 ]
@@ -28,6 +28,10 @@ extra-package-dbs: []
 
 # Control whether we use the GHC we find on the path
 # system-ghc: true
+#
+nix:
+   enable: true
+   packages: [libpfm]
 
 # Require a specific version of stack, using version ranges
 # require-stack-version: -any # Default
