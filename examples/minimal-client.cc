@@ -2,26 +2,56 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+// We print out some debugging info here, which you don't normally need.  Hence the #define below.
 #define private public
 #include "ppt-Minimal.hh"
 #include <string.h>
 #include <sys/ioctl.h>
-#include <linux/perf_event.h>
 #include <sys/mman.h>
 #include <asm/unistd.h>
-#include <perfmon/pfmlib.h>
-#include <perfmon/pfmlib_perf_event.h>
 #include <assert.h>
 #include "ppt-control.h"
 
 extern "C" const char* _ppt_json_Minimal;
+//
+// Secret debugging interface.
 namespace ppt { namespace Minimal {
-// secret debugging interface.
 ppt_control *get_ctrl_ptr();
 }}  // namespace ppt::Minimal
 
+// Forced activity for testing the tooling.
+static void do_a_work() {
+  static int buffer[512];
+  static int count = 0;
+  for (int i = 0; i < 512; i++) {
+	buffer[i] = buffer[i] ^ (i << count);
+	buffer[i] = buffer[i] ^ ( (32 - i) >> count );
+  }
+  count++;
+}
+
+static void do_b_work() {
+  static int buffer[512];
+  static int count = 0;
+  for (int i = 0; i < 512; i++) {
+	buffer[i] = buffer[i] ^ (i << count) ^ 1;
+	buffer[i] = buffer[i] ^ ( (32 - i) >> count );
+  }
+  count += 3;
+}
+
+static void do_c_work() {
+  static int buffer[512];
+  static int count = 0;
+  for (int i = 0; i < 512; i++) {
+	buffer[i] = buffer[i] ^ (i << count) ^ 2;
+	buffer[i] = buffer[i] ^ ( (32 - i) >> count );
+  }
+  count += 7;
+}
+
 int main(int args, char ** argv) {
-   int acount=1000, bcount=2000, ccount=3000; 
    char * minimal = strdup(_ppt_json_Minimal);
    const char * orig = _ppt_json_Minimal;
    printf ("sizeof(ppt_control) = %lu\n",  sizeof(struct ppt_control));
@@ -35,9 +65,7 @@ int main(int args, char ** argv) {
       delay = atoi(argv[1]);
    }
 
-
    printf("Measuring instruction count for this printf\n");
-
 
    while (1) {
        usleep(delay * 1000);
@@ -50,9 +78,18 @@ int main(int args, char ** argv) {
        } else if (strcmp(minimal, _ppt_json_Minimal)) {
           printf("_ppt_json_Minimal CHANGED STRING TO %s\n", _ppt_json_Minimal);
        }
-       record.a = 0xaaaa0000 + acount++;
-       record.b = acount - record.a;
-       record.c = 0xcccccccc;
+       const int acount = rand()  % 500;
+       const int bcount = rand()  % 500;
+       const int ccount = rand()  % 500;
+       record.a = acount;
+       record.b = bcount;
+       record.c = ccount;
+       for (int a = 0; a < acount; a++) 
+       	   do_a_work();
+       for (int b = 0; b < bcount; b++) 
+       	   do_b_work();
+       for (int c = 0; c < ccount; c++) 
+       	   do_c_work();
        record.snapshot_events_end();
        record.snapshot_duration_end();
        record.save();

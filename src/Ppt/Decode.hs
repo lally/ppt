@@ -268,7 +268,6 @@ showValue _ (PVCounter v 1 (PIntelCounter _ name _)) = name ++ ": " ++ show v
 showValue _ (PVCounter v 2 (PIntelCounter _ _ name)) = name ++ ": " ++ show v
 showValue _ (PVCounter _ _ PCNone) = "0"
 
-
 -- |Currently does no processing. Opens 'filename' and writes out CSVs
 -- - one per found frame type - to 'destDir'.
 decodeFileToCSVs filename destDir = do

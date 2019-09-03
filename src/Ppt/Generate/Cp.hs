@@ -63,7 +63,7 @@ controlDecl cfg =
                                   , (uint64_t, "client_flags")
                                   , ("uint32_t", "nr_perf_ctrs")
                                   , ("struct perf_counter_entry", "counterdata[3]")]
-  in ppt_cntr_entry <> ppt_ctrl_decl
+  in PP.vcat [ppt_cntr_entry, ppt_ctrl_decl]
 
 dataDecl :: OutputCfg -> String -> [GenModule] -> PP.Doc
 dataDecl cfg first mods =
@@ -131,7 +131,7 @@ writeDecl cfg firstName (ClassDecl name typeIdx clsMems clsMeths _ _) =
                      then saveFn firstName cfg typeIdx
                      else restSaveFn firstName cfg
 
-      withMeths meths = (publicTail clsMems) ++ (indentify cfg ((chosenSaveFn):clsMeths)) 
+      withMeths meths = (publicTail clsMems) ++ (indentify cfg ((chosenSaveFn):clsMeths))
   in PP.vcat ((tag <+> PP.lbrace):( memBody ++ (withMeths clsMeths)) ++ [
     PP.rbrace <> PP.semi])
 
@@ -234,8 +234,7 @@ attachFn firstName cfg hasCounters =
             ++ (if hasCounters
                 then [stmt "setupCounters()"]
                 else []) ++
-            [stmt "return true"
-            ]),
+            [stmt "return true"]),
         blockdecl cfg (docConcat ["else if (",bufp," && !_ppt_hmem_",buf,")"]) PP.empty (
             (if hasCounters
               then [stmt "closeCounters()"]
@@ -246,7 +245,8 @@ attachFn firstName cfg hasCounters =
                 stmt $ bufp ++ " = nullptr",
                 stmt $ "_ppt_ctrl = nullptr",
                 docConcat ["_ppt_hmem_", buf, " = 0"] <> PP.semi,
-                stmt "return false"])
+                stmt "return false"]),
+        stmt "return false"
         ]
     ]
     where buf = bufName cfg
