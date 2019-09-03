@@ -4,3 +4,4 @@ src/**/*.c
 examples/*
 save.*
 .ppt/
+*.lock

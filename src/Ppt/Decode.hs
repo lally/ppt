@@ -101,20 +101,22 @@ readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
                       return $ Just $ PVRational $ float2Double value
          PInt -> do value <- peekElemOff (castPtr ptrAdded :: Ptr Word32)  0
                     return $ Just $ PVIntegral $ fromIntegral value
-         (PTime (ETimeSpec _)) -> do high <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
-                                     low <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 1
-                                     return $ Just $ PVTime (fromIntegral high) (fromIntegral low)
+         PTime (ETimeSpec _) -> do high <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
+                                   low <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 1
+                                   return $ Just $ PVTime (fromIntegral high) (fromIntegral low)
          PTime ETimeVal-> do high <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
                              return $ Just $ PVTime (fromIntegral high) 0
          -- TODO(lally): Add decode support for these counters.
          PCounter (Just n) -> do val <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
                                  return $ Just $ PVCounter val n (PIntelCounter "" "" "")
-         PByte -> return Nothing -- $ Just $ PVIntegral 0
+         PCounter Nothing -> return $ Just $ PVCounter 0 0 PCNone
+         PByte -> do val <- peekElemOff (castPtr ptrAdded :: Ptr Word8) 0
+                     return $ Just $ PVIntegral (fromIntegral val)
       let thisResult = FEValue <$> (pure primValue) <*> (findMember (frMemName lmem) layout) <*> pure lmem
       rest <- readMember lmems layout v
---      MaybeT $ do putStrLn $ "Got member: " ++ show primValue ++ " for found member " ++ (
---                    show $ findMember (frMemName lmem) layout) ++ " for layout mem " ++ show lmem
---                  return $ Just ()
+      MaybeT $ do putStrLn $ "Got member: " ++ show primValue ++ " for found member " ++ (
+                    show $ findMember (frMemName lmem) layout) ++ " for layout mem " ++ show lmem
+                  return $ Just ()
       MaybeT $ return $ (:) <$> thisResult <*> (pure rest)
         -- TODO: implement the rest of these.  Look at what I can do in Vector to read different types.
         -- this probably needs to move to IO (Maybe [FrameElementValue]) and use Ptr and cast to read
@@ -143,22 +145,26 @@ decodeFromBuffer tinfo vec startOffset sz layouts =
          mpred False d _ = MaybeT $ return $ Just d
          readVecInt :: V.Vector Word8 -> Int -> MaybeIO Int
          readVecInt vec i = MaybeT $ V.unsafeWith vec (\ptr -> do let p = castPtr ptr :: Ptr Int
-                                                                  val <- peek p
+                                                                  val <- peekElemOff p i
                                                                   return (Just val))
+         mlog s = MaybeT $ do putStrLn s
+                              return (Just s)
 
      mrequire (sz == size) "Frame sizes are equal"
-     mrequire (startOffset + sz <= V.length vec) ("Frame fits in vector", startOffset, V.length vec)
+     mrequire (startOffset + sz <= V.length vec) ("Frame fits in vector", startOffset + sz, V.length vec)
      mrequire (lIxOf memFrontSeq == startOffset) "Frame seqno is first"
      startSeqno <- readVecInt vec startOffset
      endSeqno <- readVecInt vec (lIxOf memBackSeq)
      mrequire (startSeqno == endSeqno) ("Sequence numbers match", startSeqno, endSeqno)
      frameType <- if nrFrameTypes > 1
-       then readVecInt vec (lIxOf $ head memTypeDescs)
+       then do -- mlog $ "Reading " ++ (show $ head memTypeDescs) ++ " at loffset " ++ show startOffset
+               readVecInt vec (lIxOf $ head memTypeDescs)
        else MaybeT $ return $ Just 0
      mrequire (frameType < nrFrameTypes) ("Frame type is defined", frameType, nrFrameTypes)
      let layout = layouts !! frameType
      -- TODO: Go applicative on list constructor for members
      members <- readMember (flLayout layout) layout (vec, tinfo, startOffset)
+     mlog $ "Got frame";
      return (FValue (flFrame layout) members)
 
 
@@ -179,7 +185,7 @@ decodeFromBytes tinfo json bytes = do
 --      putStrLn $ "started with ByteString of length " ++ (show bslen)
       let numRecords = fromIntegral (BSL.length bytes `div` (fromIntegral frsize))
       res <- mapM (\idx -> runMaybeT $ decodeFromBuffer tinfo vec (idx * frsize) frsize frameLayouts) [0..numRecords]
---      putStrLn $ " decoded " ++ show (length res) ++ " records:\n\t" ++ (L.intercalate "\n\t" $ map show res)
+      putStrLn $ " decoded " ++ show (length res) ++ " records:\n\t" ++ (L.intercalate "\n\t" $ map show res)
       return $ catMaybes res
 
 deserialiseHeader :: DBG.Get (Maybe Word32)
@@ -201,10 +207,9 @@ splitFileContents contents =
           mfileRecord = decode fileRecordBlob :: Maybe FileRecord
       in maybe Nothing (\v -> Just (v, binaryFrames)) mfileRecord
 
-decodeFile :: {-TargetInfo -> -}BSL.ByteString -> IO ([FrameValue])
-decodeFile {-tinfo-} contents = do
-  let -- lazy = BSL.fromChunks [contents]
-      length = DBG.runGet deserialiseHeader contents
+decodeFile :: BSL.ByteString -> IO ([FrameValue])
+decodeFile contents = do
+  let length = DBG.runGet deserialiseHeader contents
       header = splitFileContents contents
   case header of
     Nothing -> do putStrLn "Invalid file format"
@@ -290,10 +295,15 @@ decodeCommand [] = do
   putStrLn "usage: ppt decode input_filename [output_dir]"
   putStrLn "  where output_dir will be generated if unspecified."
 
-decodeCommand (filename:rest) = do
-  let outputDir = if length rest < 1
-                    then filename ++ "_output"
-                    else head rest
-  result <- decodeFileToCSVs filename outputDir
-  putStrLn $ "Decoded " ++ (L.intercalate ", " result ) ++ " into " ++ outputDir
+decodeCommand (first:rest) = do
+  let (console, filename) = if (head first) == '-'
+                            then (True, head rest)
+                            else (False, first)
+  if console
+    then decodeFileToConsole filename 50
+    else do let outputDir = if length rest < 1
+                            then filename ++ "_output"
+                            else head rest
+            result <- decodeFileToCSVs filename outputDir
+            putStrLn $ "Decoded " ++ (L.intercalate ", " result ) ++ " into " ++ outputDir
   return ()
