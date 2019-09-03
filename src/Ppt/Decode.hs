@@ -114,9 +114,9 @@ readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
                      return $ Just $ PVIntegral (fromIntegral val)
       let thisResult = FEValue <$> (pure primValue) <*> (findMember (frMemName lmem) layout) <*> pure lmem
       rest <- readMember lmems layout v
-      MaybeT $ do putStrLn $ "Got member: " ++ show primValue ++ " for found member " ++ (
-                    show $ findMember (frMemName lmem) layout) ++ " for layout mem " ++ show lmem
-                  return $ Just ()
+      --MaybeT $ do putStrLn $ "Got member: " ++ show primValue ++ " for found member " ++ (
+      --              show $ findMember (frMemName lmem) layout) ++ " for layout mem " ++ show lmem
+      --            return $ Just ()
       MaybeT $ return $ (:) <$> thisResult <*> (pure rest)
         -- TODO: implement the rest of these.  Look at what I can do in Vector to read different types.
         -- this probably needs to move to IO (Maybe [FrameElementValue]) and use Ptr and cast to read
@@ -257,11 +257,17 @@ sortValues inputs =
           layoutMems = mapMaybe (\c -> case c of (FEValue _ _ m) -> Just m ; (FESeqno _) -> Nothing) vals
       in HM.insertWith mergeEntry fr (makeEntry fr layoutMems seq row) mp
 
+-- |Show a raw value given a time representation config.
 showValue :: ETimeRep -> PrimitiveValue -> String
-showValue _ (PVRational d) = show d
-showValue _ (PVIntegral i) = show i
 showValue (ETimeSpec _) (PVTime a b) = show $ a * 1000000000 + b
 showValue (ETimeVal) (PVTime a b) = show $ a * 1000000 + b
+showValue _ (PVRational d) = show d
+showValue _ (PVIntegral i) = show i
+showValue _ (PVCounter v 0 (PIntelCounter name _ _)) = name ++ ": " ++ show v
+showValue _ (PVCounter v 1 (PIntelCounter _ name _)) = name ++ ": " ++ show v
+showValue _ (PVCounter v 2 (PIntelCounter _ _ name)) = name ++ ": " ++ show v
+showValue _ (PVCounter _ _ PCNone) = "0"
+
 
 -- |Currently does no processing. Opens 'filename' and writes out CSVs
 -- - one per found frame type - to 'destDir'.

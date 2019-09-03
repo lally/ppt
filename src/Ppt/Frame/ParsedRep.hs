@@ -16,6 +16,7 @@ import Control.Lens hiding (element, noneOf)
 
 data PCounterConfig = PCNone
                     | PIntelCounter String String String
+                    -- ^Three counter names (libpfm4 syntax)
                     deriving (Generic, Eq, Show)
 
 -- |Common to both Parsed Rep and Machine Layout.  Presumed x86_64 type sizes.
