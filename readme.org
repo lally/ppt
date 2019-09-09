@@ -1,4 +1,4 @@
-#+TITLE: =ppt= Portable Performance Tool
+#+TITLE: =ppt= Portable Performance Tool AKA Production Performance Telemetry
 #+AUTHOR: Lally Singh
 
 * Purpose
@@ -6,6 +6,9 @@
 frames and =ppt= will generate code to call and link into your executable.
 Then =ppt= will let you attach to your running executable to collect these
 traces.
+
+This is quite useful when you want to know why your code performs a certain way
+in real-world scenarios.
 
 A frame is essentially a C =struct= that you fill out and save to a circular
 buffer in shared memory, called a =buffer=.  You can add any members you like
@@ -19,6 +22,10 @@ frame is a no-op.
 
 * Why another performance tool?
 ** Why not dtrace or gprof?
+   Because they solve different problems.  In a dreaded car analogy, =gprof= is
+   a dynomometer check, =dtrace= is a PMU logger, and =ppt= is custom
+   telemetry.  All useful, all separate.
+
    =dtrace= is an excellent tool.  It instruments unaltered binaries using
    several built-in "providers", and you can alter the program to give =dtrace=
    even more data.  But it has two drawbacks:
@@ -47,7 +54,9 @@ frame is a no-op.
 
    The transfer protocol for sending a frame from the process under observation
    to =ppt= for recording is a pair of memory barriers, a copy of the data, and
-   some additional writes to the sequence number.
+   some additional writes to the sequence number.  There's no flow-control or
+   other synchronization between =ppt= and the instrumented app.  =ppt= can't
+   slow down your app, even if you ^Z =ppt=.
 
 ** Use =ppt= for regression analysis.
    The best use-case for =ppt= is for regression analysis of state or inputs to
@@ -360,6 +369,7 @@ minimal.csv
     should be straightforward.
     - Back when this was used on Solaris, the generator was C based.  It's not hard to bring it back, if it was useful.
     - VM-based languages are probably not as straight forward.
+    - python3 support is work-in-progress.
 
   - =save()= checks to see if a =ppt= process is attached or has just
     detached.  In that case, it will take a few system calls to setup / tear
