@@ -1,5 +1,9 @@
-#+TITLE: =ppt= Portable Performance Tool AKA Production Performance Telemetry
+#+TITLE: =ppt= Production Performance Telemetry 
 #+AUTHOR: Lally Singh
+
+AKA the Portable Performance Tool.  But really, the performance tool of last resort.
+
+/Too cool to find on Google!  We live in the shadows of powerpoint!/
 
 * Purpose
 =ppt= is a performance tracing tool.  You define different types of individual
