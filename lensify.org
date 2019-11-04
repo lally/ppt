@@ -1,0 +1,44 @@
+#+TITLE: Lensification
+
+* Goals
+  - Get used to lenses myself.
+  - Clean up the IR to the point where a lot of mechanical code gets replaced
+    with smaller idiomatic lens code.
+  - Have a clean basis for a query/filtering language.
+  - Build the query/filtering language as a parser that builds lenses.
+
+* Clean up IR
+** Layout
+   - This is going to be some work!
+   - What *operations* do I want to do?  Let them guide my work.
+*** Layout Operations
+    - Calculate Padding
+    - Fetch data from stream!
+      - This is the big one.   
+      - Make a lens for each LayoutMember, and have it let me directly
+        read/write =Primitive= wrappers?.
+        Type: =Lens ByteStream PrimitiveValue=
+        - With some code that reads/writes the value back into the stream.  It
+          wraps the lens. =valueLens=
+        - Well, we don't need just *ONE*
+          Something that generates the lens we want would do the trick here.
+          - A proper meta system.
+          - Representations of the meta system?
+            - Look at what I want to build:
+              - Read / write data
+              - Query/calc offsets
+        - Synthetic values are =Folds= over lenses.
+          - Regular values are pass-through lenses from ParsedRep to
+            layout.  ParsedRep synthetics are composed of the layout lenses.
+        - For the buffer, a Prism for the bytestream is what we need.  With an
+          implicit =Nothing= value for seqno errors.
+
+** ParsedRep
+   - Useful for rewriting the JSON later.
+   - Based off of =Layout=.
+
+** Analysis
+   Can I generate lens definitions (or have a generator in haskell!) that makes
+   lenses for me, that I can then use against the raw capture data in iHaskell?
+   - That seems the most natural.
+

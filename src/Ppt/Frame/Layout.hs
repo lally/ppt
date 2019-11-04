@@ -35,8 +35,10 @@ data TargetInfo = TargetInfo { tDouble :: Int
 
 -- |Machine Layout
 data SeqNoSide = FrontSeq | BackSeq deriving (Generic, Eq, Show)
+
 data IntervalSide = IntBegin Int Int -- ^Begin of Num of Num
                   | IntEnd Int Int deriving (Generic, Eq, Show)
+
 data LayoutKind = LKSeqno SeqNoSide
                   -- ^Sequence numbers.  Front and back
                 | LKTypeDescrim Int
@@ -51,25 +53,32 @@ data LayoutKind = LKSeqno SeqNoSide
                    -- ^Padding between members, or at end.  Param is
                    -- number of bytes
                 deriving (Generic, Eq, Show)
+makeTraversals ''LayoutKind
 
-data LayoutMember = LMember { lType :: Primitive
-                            , lOffset :: Int
-                            , lAlignment :: Int
+data LayoutMember = LMember { _lType :: Primitive
+                            , _lOffset :: Int
+                            , _lAlignment :: Int
                               -- ^Typically the same as lSize, unless it's padding
-                            , lSize :: Int
+                            , _lSize :: Int
                               -- ^Purely a function of TargetInfo and lType
-                            , lKind :: LayoutKind
-                            , lName :: String }
+                            , _lKind :: LayoutKind
+                            , _lName :: String }
                    deriving (Generic, Eq, Show)
 
-data LayoutIOSpec = LayoutIO { lioSize :: Int
-                             , lioBackOffset :: Int
+makeLenses ''LayoutMember
+
+data LayoutIOSpec = LayoutIO { _lioSize :: Int
+                             , _lioBackOffset :: Int
                              } deriving (Eq, Show)
 
-data FrameLayout = FLayout { flName :: String
-                           , flFrame :: Frame
-                           , flLayout :: [LayoutMember]
+makeLenses ''LayoutIOSpec
+
+data FrameLayout = FLayout { _flName :: String
+                           , _flFrame :: Frame
+                           , _flLayout :: [LayoutMember]
                            } deriving (Generic, Eq, Show)
+
+makeLenses ''FrameLayout
 
 data JsonRep = JsonRep { jsAbi :: String
                        , jsBufferEmit :: EmitOptions
