@@ -2,12 +2,14 @@
 module Ppt.Generate.Cp where
 
 import Ppt.Frame.ParsedRep
+import Ppt.Frame.Types
 import Ppt.Frame.Layout
 import Ppt.Generate.CpConfig
 import Ppt.Generate.CpPrim
 
 import Prelude hiding ((<>))
 import Control.Exception (throw, NoMethodError(..))
+import Control.Lens
 import Text.PrettyPrint ((<>),(<+>))
 import Data.Aeson (encode)
 import Data.ByteString.Lazy.Char8 (unpack)
@@ -353,7 +355,7 @@ moduleSource firstName cfg _ GMCounters  =
 statLayouts :: [FrameLayout] -> (String, LayoutIOSpec)
 statLayouts flayouts= case flayouts of
         [] -> ("void", LayoutIO  0 0)
-        (x:_) -> (flName x, layoutSpec x)
+        (x:_) -> (x ^. flName, layoutSpec x)
 
 modImpls :: OutputCfg -> String -> [GenModule] -> PP.Doc
 modImpls cfg firstName mods =

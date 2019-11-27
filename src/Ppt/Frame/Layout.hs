@@ -1,16 +1,20 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Ppt.Frame.Layout where
-import GHC.Generics
-import Data.Aeson
-import Data.Typeable
-import Ppt.Frame.ParsedRep
 import Control.Applicative
 import Control.Exception
+import Control.Lens (makePrisms, makeLenses, view, folded, (^.), (^..) )
 import Control.Monad
+import Data.Aeson
 import Data.Either
+import Data.Typeable
 import Debug.Trace
-import Data.List as L
+import GHC.Generics
+import qualified Data.List as L
 import qualified Data.HashMap.Strict as HM
+
+import Ppt.Frame.Types
+import Ppt.Frame.ParsedRep
 
 data LayoutException = InvalidInputException Frame String
                      | InternalFailureException String
@@ -18,67 +22,6 @@ data LayoutException = InvalidInputException Frame String
 
 instance Exception LayoutException
 
--- |Indicates sizes of machine types on the runtime platform.  Also
--- includes other layout-related values due to options.
-data TargetInfo = TargetInfo { tDouble :: Int
-                             , tFloat :: Int
-                             , tInt :: Int
-                             , tTime :: Int
-                             , tCounter :: Int
-                             , tPadTo :: Int
-                               -- ^Minimum size to pad an object to.
-                               -- Normally the same as tInt, unless
-                               -- there's an option to pad it higher,
-                               -- to take advantage of specialized
-                               -- instructions.
-                             } deriving (Generic, Eq, Show)
-
--- |Machine Layout
-data SeqNoSide = FrontSeq | BackSeq deriving (Generic, Eq, Show)
-
-data IntervalSide = IntBegin Int Int -- ^Begin of Num of Num
-                  | IntEnd Int Int deriving (Generic, Eq, Show)
-
-data LayoutKind = LKSeqno SeqNoSide
-                  -- ^Sequence numbers.  Front and back
-                | LKTypeDescrim Int
-                  -- ^Number of elements to discriminate by.
-                | LKMember FrameMember (Maybe IntervalSide)
-                  -- ^An actual declared member.  It may be one of a
-                  -- group.  (Current, Total), where Current < Total,
-                  -- always.  For counters, we have some number of
-                  -- them (3) that get generated for each 'counter'
-                  -- member.  Interval counters get twice as many.
-                 | LKPadding Int
-                   -- ^Padding between members, or at end.  Param is
-                   -- number of bytes
-                deriving (Generic, Eq, Show)
-makeTraversals ''LayoutKind
-
-data LayoutMember = LMember { _lType :: Primitive
-                            , _lOffset :: Int
-                            , _lAlignment :: Int
-                              -- ^Typically the same as lSize, unless it's padding
-                            , _lSize :: Int
-                              -- ^Purely a function of TargetInfo and lType
-                            , _lKind :: LayoutKind
-                            , _lName :: String }
-                   deriving (Generic, Eq, Show)
-
-makeLenses ''LayoutMember
-
-data LayoutIOSpec = LayoutIO { _lioSize :: Int
-                             , _lioBackOffset :: Int
-                             } deriving (Eq, Show)
-
-makeLenses ''LayoutIOSpec
-
-data FrameLayout = FLayout { _flName :: String
-                           , _flFrame :: Frame
-                           , _flLayout :: [LayoutMember]
-                           } deriving (Generic, Eq, Show)
-
-makeLenses ''FrameLayout
 
 data JsonRep = JsonRep { jsAbi :: String
                        , jsBufferEmit :: EmitOptions
@@ -90,8 +33,8 @@ data JsonRep = JsonRep { jsAbi :: String
 
 layoutSpec :: FrameLayout -> LayoutIOSpec
 layoutSpec layout =
-  let sumSize = sum $ map lSize $ flLayout layout
-      lastMem = last $ flLayout layout
+  let sumSize = sum $ layout ^.. flLayout . folded . lSize -- map (view (flLayout . lSize)) layout
+      lastMem = last $ layout ^. flLayout
       backOff = case lastMem of
                   (LMember _ off _ _ (LKSeqno BackSeq) _) -> off
   in LayoutIO sumSize backOff
@@ -126,8 +69,8 @@ serializeOffsets :: TargetInfo -> [LayoutMember] -> [LayoutMember]
 serializeOffsets target inmems =
   let serialize :: TargetInfo -> Int -> [LayoutMember] -> [LayoutMember]
       serialize tinfo pfx (m:mems) =
-        let nextElemSize = pfx + (sizeOf tinfo (lType m))
-        in (m {lOffset = pfx }):(serialize tinfo nextElemSize mems)
+        let nextElemSize = pfx + (sizeOf tinfo (m ^. lType))
+        in (m {_lOffset = pfx }):(serialize tinfo nextElemSize mems)
   in serialize target 0 inmems
 
 mlast :: [a] -> Maybe a
@@ -142,8 +85,8 @@ frameSize json =
   let emit = jsBufferEmit json
       frames = jsBufferFrames json
   in do aFrame <- mlast frames
-        lastMem <- mlast $ flLayout aFrame
-        return (lOffset lastMem + lSize lastMem)
+        lastMem <- mlast $ aFrame ^. flLayout
+        return (lastMem ^. lOffset + lastMem ^. lSize)
 
 -- Then get theem padded to the same size.
 instance ToJSON SeqNoSide

@@ -1,5 +1,6 @@
 module Ppt.Generate.CpConfig where
 import Ppt.Frame.ParsedRep
+import Ppt.Frame.Types
 import Ppt.Frame.Layout
 
 import qualified Text.PrettyPrint as PP

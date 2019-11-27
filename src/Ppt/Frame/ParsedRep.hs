@@ -52,7 +52,7 @@ data Primitive = PDouble
                | PCounter (Maybe Int)  -- ^The index of the counter (we store several)
                | PByte
                deriving (Generic, Eq, Show)
-
+makePrisms ''Primitive
 
 data ERuntime = ERuntime { erMultithread :: Bool } deriving (Generic, Eq, Show)
 data ETag = Tag String String -- ^Key, Value

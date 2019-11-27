@@ -1,11 +1,13 @@
 module Ppt.Frame.Util (showLayoutData, showLayout) where
 import Ppt.Frame.Layout
+import Ppt.Frame.Types
 import Ppt.Frame.LayoutAlgo
 import Ppt.Frame.ParsedRep
 import Ppt.Frame.Parser
 import Ppt.Generate.CpConfig
 import Ppt.Generate.CpPrim
 import Ppt.Generate.Cp
+import Control.Lens hiding (bimap)
 import Data.Bits (shiftR, (.&.))
 import Foreign.C.Types
 import Text.Printf
@@ -75,9 +77,9 @@ lshow (LMember ty off algn sz knd nm) = printf "%-20s off=%3d algn=%3d sz=%2d na
 evalLayout :: LayoutMember -> String
 evalLayout lmem =
   let alignCheck m =
-        let sz = sizeOf x64 $ lType m in
-          (if (lKind m == LKPadding (lSize m) || (lSize m == sz))
-           then (if ((lOffset m) `mod` (lAlignment m) == 0)
+        let sz = sizeOf x64 $ m ^. lType in
+          (if (m ^.lKind == LKPadding (m ^. lSize) || (m ^. lSize == sz))
+           then (if ((m ^. lOffset) `mod` (m ^. lAlignment) == 0)
                   then 0
                   else 2)
            else 1)
@@ -90,14 +92,14 @@ layoutData :: String -> [LayoutMember] -> IO ()
 layoutData n elems = do
       let paddingSz' (LKPadding n) = n
           paddingSz' _ = 0
-          paddingSz mem = paddingSz' $ lKind mem
+          paddingSz mem = paddingSz' $ mem ^. lKind
           showPad :: Int -> String
           showPad 0 = "   "
           showPad n = printf "%3d" n
       putStrLn $ " -- " ++ n ++ " -- "
       putStrLn $ L.intercalate "\n" $ map (\s -> (showPad $paddingSz s) ++ evalLayout s) elems
       putStrLn $ " Padding sum: " ++ (show $ sum $ map paddingSz elems) ++ ", alignment: " ++ (
-        show $ maximum $ map lSize elems)
+        show $ maximum $  elems ^..folded.lSize)
 
 showLayout :: [Frame] -> IO ()
 showLayout frames = do
@@ -105,9 +107,6 @@ showLayout frames = do
   case result of
     Left error -> do putStrLn error
     Right flayouts -> do
-      let paddingSz' (LKPadding n) = n
-          paddingSz' _ = 0
-          paddingSz mem = paddingSz' $ lKind mem
       mapM_ (\(FLayout n _ elems) -> layoutData n elems) flayouts
       return ()
 
@@ -120,7 +119,7 @@ showLayoutData j = do
   putStrLn "Frame Layouts"
   showFrameLayouts (jsBufferFrames j)
   putStrLn "\nUnderlying Frames"
-  showLayout (map flFrame $ jsBufferFrames j)
+  showLayout ((jsBufferFrames j) ^..folded.flFrame)
   return ()
 
 

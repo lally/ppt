@@ -28,6 +28,7 @@ library
                        , Ppt.Frame.ParsedRep
                        , Ppt.Frame.Layout
                        , Ppt.Frame.LayoutAlgo
+                       , Ppt.Frame.Types
                        , Ppt.Frame.Util
                        , Ppt.ElfProcess
 
@@ -54,6 +55,7 @@ library
                      , pretty
                      , process
                      , pureMD5
+                     , safe
                      , spool
                      , time
                      , transformers
@@ -77,6 +79,7 @@ executable ppt
                      , OverloadedStrings
   default-language:    Haskell2010
   extra-libraries:     pfm
+
 executable elf
   hs-source-dirs:      tools
   main-is:             Elf.hs
@@ -93,6 +96,7 @@ test-suite ppt-test
   main-is:             Spec.hs
   build-depends:       QuickCheck
                      , base
+                     , lens
                      , hspec
                      , ppt
                      , random

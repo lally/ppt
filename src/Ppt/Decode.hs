@@ -5,7 +5,9 @@ import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Maybe
+import Control.Lens
 import Ppt.Frame.ParsedRep hiding (FValue)
+import Ppt.Frame.Types
 import Ppt.Frame.Layout
 import Numeric (showHex)
 import Foreign.Ptr
@@ -16,6 +18,7 @@ import Data.Vector.Storable ((!), (!?))
 import Foreign.Storable
 import qualified Data.List as L
 import Data.Vector.Storable.ByteString
+import Safe
 import System.IO
 import qualified Data.Foldable as F
 import qualified Data.HashMap.Strict as HM
@@ -44,6 +47,7 @@ data DecodedRow = DRow { _rElements :: [FrameElement]
                        , _rSeqno :: Int
                        , _rValues :: [PrimitiveValue]
                        } deriving (Eq, Show)
+
 data DecodedFrame = DFrame { _dFrame :: Frame
                            , _dLayout :: [LayoutMember]
                            , _dRows :: [DecodedRow]
@@ -56,14 +60,14 @@ hexList xs = (concatMap hex thisWord) ++ (' ':(hexList rest))
 
 descValue :: FrameValue -> String
 descValue (FValue (Frame n _) vals) =
-  let descElem (FEValue p _ l) = (lName l) ++ " " ++ show p
+  let descElem (FEValue p _ l) = (l ^. lName) ++ " " ++ show p
       descElem (FESeqno n) = "# " ++ show n
   in n ++ ": " ++ (L.intercalate ", " $ map descElem vals)
 
 findMember :: String -> FrameLayout -> Maybe FrameMember
 findMember name layout =
   if length mems > 0 then Just (head mems) else Nothing
-  where (Frame _ elements) = flFrame layout
+  where (Frame _ elements) = layout ^. flFrame
         memberNamed s (FMemberElem mem@(FMember _ name _)) | (s == name) = Just mem
                                                            | otherwise = Nothing
         memberNamed _ _ = Nothing
@@ -72,14 +76,14 @@ findMember name layout =
 type MaybeIO = MaybeT IO
 
 frMemName :: LayoutMember -> String
-frMemName fl = case (lKind fl) of
+frMemName fl = case (fl ^. lKind) of
     (LKMember (FMember _ nm _) _) -> nm
     _ -> undefined
 
 readMember :: [LayoutMember] -> FrameLayout -> (V.Vector Word8, TargetInfo, Int) -> MaybeIO ( [FrameElementValue])
 readMember [] _ _ = do return []
 readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
-  case (lKind lmem) of
+  case (lmem ^. lKind) of
     (LKSeqno FrontSeq) -> do
       primValue <- MaybeT $ V.unsafeWith vec $ \ptr -> do
         value <- peekElemOff (castPtr (plusPtr ptr startOffset) :: Ptr Word32) 0
@@ -87,7 +91,7 @@ readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
       rest <- readMember lmems layout v
       MaybeT $ return $ (:) <$> (pure $ FESeqno primValue) <*> (pure rest)
     (LKMember elem _) -> do
-      let lIxOf mem = startOffset + (lOffset mem)
+      let lIxOf mem = startOffset + (mem ^. lOffset)
           mrequire :: Show a => Bool -> a -> MaybeIO a
           mrequire True a = MaybeT $ return $ Just a
           mrequire False msg = MaybeT $ do putStrLn $ show msg
@@ -126,17 +130,23 @@ readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
 decodeFromBuffer :: TargetInfo -> V.Vector Word8 -> Int -> Int -> [FrameLayout] -> MaybeIO (FrameValue)
 decodeFromBuffer tinfo vec startOffset sz layouts =
   do let genSpec = layoutSpec $ head layouts
-         size = lioSize genSpec
-         lIxOf mem = startOffset + (lOffset mem)
-         memFrontSeq = head $ filter (\m -> lKind m == (LKSeqno FrontSeq)) $ flLayout $ head layouts
-         memBackSeq = head $ filter (\m -> lKind m == (LKSeqno BackSeq)) $ flLayout $ head layouts
-         memTypeDescs = filter (\m -> isTypeDesc $ lKind m) $ flLayout $ head layouts
-                        where isTypeDesc (LKTypeDescrim _) = True
-                              isTypeDesc _ = False
-         nrFrameTypes =
-           case memTypeDescs of
-             [] -> 1
-             (mt:_) -> let (LKTypeDescrim sz) = lKind mt in sz
+         size = genSpec ^.lioSize
+         lIxOf mem = startOffset + (mem ^. lOffset)
+         firstMembers = (head layouts) ^. flLayout
+--         memFrontSeq = head $ filter (\m -> m ^. lKind == (LKSeqno FrontSeq)) firstMembers
+         memFrontSeq, memBackSeq :: LayoutMember
+         memFrontSeq = head $ firstMembers ^.. folded.filtered (\m -> m ^. lKind == (LKSeqno FrontSeq))
+         memBackSeq = head $ firstMembers ^.. folded.filtered (\m -> m ^. lKind == (LKSeqno BackSeq))
+         memTypeDescs :: [LayoutMember]
+         memTypeDescs = firstMembers ^.. folded.filtered (\m -> has _LKTypeDescrim (m ^. lKind)) --filtered isTypeDesc
+--           filter (\m -> isTypeDesc $ lKind m) $ view flLayout $ head layouts
+--                        where isTypeDesc (LKTypeDescrim _) = True
+--                              isTypeDesc _ = False
+         nrFrameTypes :: Int
+         nrFrameTypes = headDef 1 (memTypeDescs ^.. folded.lKind._LKTypeDescrim)
+--           case memTypeDescs of
+--             [] -> 1
+--             (mt:_) -> let (LKTypeDescrim sz) = mt ^, lKind in sz
          mrequire :: Show a => Bool -> a -> MaybeIO a
          mrequire True a = MaybeT $ return $ Just a
          mrequire False msg = MaybeT $ do putStrLn $ show msg
@@ -153,19 +163,24 @@ decodeFromBuffer tinfo vec startOffset sz layouts =
      mrequire (sz == size) "Frame sizes are equal"
      mrequire (startOffset + sz <= V.length vec) ("Frame fits in vector", startOffset + sz, V.length vec)
      mrequire (lIxOf memFrontSeq == startOffset) "Frame seqno is first"
+
      startSeqno <- readVecInt vec startOffset
      endSeqno <- readVecInt vec (lIxOf memBackSeq)
+
      mrequire (startSeqno == endSeqno) ("Sequence numbers match", startSeqno, endSeqno)
+
      frameType <- if nrFrameTypes > 1
        then do -- mlog $ "Reading " ++ (show $ head memTypeDescs) ++ " at loffset " ++ show startOffset
                readVecInt vec (lIxOf $ head memTypeDescs)
        else MaybeT $ return $ Just 0
+
      mrequire (frameType < nrFrameTypes) ("Frame type is defined", frameType, nrFrameTypes)
+
      let layout = layouts !! frameType
      -- TODO: Go applicative on list constructor for members
-     members <- readMember (flLayout layout) layout (vec, tinfo, startOffset)
+     members <- readMember (layout ^. flLayout) layout (vec, tinfo, startOffset)
      mlog $ "Got frame";
-     return (FValue (flFrame layout) members)
+     return (FValue (layout ^. flFrame) members)
 
 
 -- TODO: Make this a lazy bytestring input, then use fromChunks to get
@@ -276,11 +291,8 @@ decodeFileToCSVs filename destDir = do
             firstRow = head rows
             elemName (FMemberElem (FMember _ n _)) = n
             elemName (FCalculatedElem _ _ n _ _) = n
-            timeRep = let etr (PTime t) = Just t
-                          etr _ = Nothing
-                          elems = mapMaybe (etr . lType) lmem
-                      in if length elems > 0 then head elems else ETimeVal
-            headers = "ppt_seqno, " ++( L.intercalate ", " $ map lName lmem)
+            timeRep = headDef ETimeVal $ lmem ^.. folded.lType._PTime
+            headers = "ppt_seqno, " ++( L.intercalate ", " $ lmem ^.. folded.lName)
             saveRow (DRow _ n vs) = L.intercalate ", " $ (show n):(map (showValue timeRep) vs)
         h <- openFile (destDir ++ "/" ++ fileName) WriteMode
         hPutStrLn h headers

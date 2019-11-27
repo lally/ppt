@@ -1,10 +1,12 @@
 module Ppt.Frame.LayoutAlgo where
+import Ppt.Frame.Types
 import Ppt.Frame.Layout
 import Ppt.Frame.ParsedRep
 import Data.List as L
 import Debug.Trace
 import Control.Applicative
 import Control.Exception
+import Control.Lens
 import Control.Monad
 import Data.Either
 
@@ -47,12 +49,13 @@ data FrameMemberBlock = FMBlock { _frInternalElements :: [LayoutMember]
 instance Show FrameMemberBlock where
   show fmb = ("FMBlock " ++ (_frName fmb) ++ " align " ++ (
                  show $ _frAlign fmb) ++ "  front = [\n\t" ++ (
-    L.intercalate "\n\t" $ map showLMem (_frFront fmb)) ++ "\n]  elems = [\n\t" ++ (
+    L.intercalate "\n\t" $ map showLMem (_frFront fmb))  ++ "\n]  elems = [\n\t" ++ (
     L.intercalate "\n\t" $ map showLMem (_frInternalElements fmb)) ++ "\n]  back = [\n\t" ++ (
     L.intercalate "\n\t" $ map showLMem (_frBack fmb)) ++ "\n]")
-    where showLMem lmem = (lName lmem) ++ ": sz=" ++ (show $ lSize lmem) ++ ", aiign=" ++ (
-            show $ lAlignment lmem) ++ ", ty=" ++ (show $ lType lmem) ++ ", kind=" ++ (
-            show $ lKind lmem)
+    where cvMems ln = map showLMem $ fmb ^. ln
+          showLMem lmem = (lmem ^. lName) ++ ": sz=" ++ (show $ lmem ^. lSize) ++ ", aiign=" ++ (
+            show $ lmem ^. lAlignment) ++ ", ty=" ++ (show $ lmem ^. lType) ++ ", kind=" ++ (
+            show $ lmem ^. lKind)
 
 -- Enhancement: look at sizes returned from calcBlockPadding and
 -- while (the back size > align && the front size > sizeof last FrameMember)
@@ -185,11 +188,11 @@ extractBlock tinfo nr f@(Frame n mems) =
 interPad :: Int -> [LayoutMember] -> [LayoutMember]
 interPad off [] =  []
 interPad off (t:ts)
-  | (off `mod` (lAlignment t)) == 0 =
-    {-traceShow ("Proceeding: ", off, t) $ -} (t { lOffset = off }):(
-      interPad (off + lSize t) ts)
+  | (off `mod` (t ^. lAlignment)) == 0 =
+    {-traceShow ("Proceeding: ", off, t) $ -} (t { _lOffset = off }):(
+      interPad (off + t ^. lSize) ts)
   | otherwise =
-    let algn = lAlignment t
+    let algn = t ^. lAlignment
         padAmt = algn - (off `mod` algn)
         padMem = LMember (PByte) off 1 padAmt (LKPadding padAmt) ("__pad_" ++ show off)
     in {-traceShow ("Padding by ", padAmt, off, t) $ -} padMem:(
@@ -197,15 +200,15 @@ interPad off (t:ts)
 
 -- |The minimum length of the FrameMemberBlock, before we add the back seqno or padding.
 minLen :: FrameMemberBlock -> Int
-minLen fmb = sum $ map lSize $ interPad 0 ( _frFront fmb ++  _frInternalElements fmb)
+minLen fmb = sum $ map (view lSize) $ interPad 0 ( _frFront fmb ++  _frInternalElements fmb)
 
 determineSizes :: [FrameMemberBlock] -> Int
 determineSizes mems = maximum $ map minLen mems
 
 backPad :: FrameMemberBlock -> Int -> [LayoutMember]
 backPad fmb desiredSz =
-  let mems =interPad 0 (_frFront fmb ++ _frInternalElements fmb)
-      sz = (\m -> lOffset m + lSize m) $ last mems
+  let mems = interPad 0 (_frFront fmb ++ _frInternalElements fmb)
+      sz = (\m -> m ^. lOffset + m ^. lSize) $ last mems
       deltaSz = desiredSz - sz
   in if deltaSz > 0
      then {-traceShow ("last mem:", last mems, " delta: ", deltaSz) $ -}[LMember PByte sz 1 deltaSz (LKPadding deltaSz) (

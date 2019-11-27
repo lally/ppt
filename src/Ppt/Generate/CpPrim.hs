@@ -1,6 +1,7 @@
 -- |C++ Code Generator Primitives
 module Ppt.Generate.CpPrim where
 import Ppt.Frame.ParsedRep
+import Ppt.Frame.Types
 import Ppt.Frame.Layout
 
 import Prelude hiding ((<>))
