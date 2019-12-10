@@ -8,7 +8,7 @@ import qualified Text.PrettyPrint as PP
 --
 -- Module Configuration
 --
-x64Layout = TargetInfo 8 4 4 16 8 4
+x64Layout = TargetInfo 8 4 4 16 8 4 3
 
 -- |Derived from EmitOptions for whatever data we need for outputting.
 data OutputCfg = OutputCfg { timeType :: String -- ^Decltype of time vars

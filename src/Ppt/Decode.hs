@@ -33,7 +33,7 @@ import qualified Data.Binary.Get as DBG
 import Data.Word
 import Data.Aeson (decode)
 
-data FrameElementValue = FEValue { _primValue :: PrimitiveValue
+data FrameElementValue = FEValue { _primValue :: Prim
                                  , _frameMember :: FrameMember
                                  , _layoutMember :: LayoutMember }
                        | FESeqno { _seqNo :: Word32 }
@@ -45,7 +45,7 @@ data FrameValue = FValue { _frame :: Frame
 
 data DecodedRow = DRow { _rElements :: [FrameElement]
                        , _rSeqno :: Int
-                       , _rValues :: [PrimitiveValue]
+                       , _rValues :: [Prim]
                        } deriving (Eq, Show)
 
 data DecodedFrame = DFrame { _dFrame :: Frame
@@ -80,15 +80,15 @@ frMemName fl = case (fl ^. lKind) of
     (LKMember (FMember _ nm _) _) -> nm
     _ -> undefined
 
-readMember :: [LayoutMember] -> FrameLayout -> (V.Vector Word8, TargetInfo, Int) -> MaybeIO ( [FrameElementValue])
-readMember [] _ _ = do return []
-readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
+readMember :: [LayoutMember] -> ReadConfig -> FrameLayout -> (V.Vector Word8, ReadConfig, Int) -> MaybeIO ( [FrameElementValue])
+readMember [] _ _ _ = do return []
+readMember (lmem:lmems) rconf layout v@(vec, rinfo, startOffset) =
   case (lmem ^. lKind) of
     (LKSeqno FrontSeq) -> do
       primValue <- MaybeT $ V.unsafeWith vec $ \ptr -> do
         value <- peekElemOff (castPtr (plusPtr ptr startOffset) :: Ptr Word32) 0
         return $ Just value
-      rest <- readMember lmems layout v
+      rest <- readMember lmems rconf layout v
       MaybeT $ return $ (:) <$> (pure $ FESeqno primValue) <*> (pure rest)
     (LKMember elem _) -> do
       let lIxOf mem = startOffset + (mem ^. lOffset)
@@ -96,7 +96,9 @@ readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
           mrequire True a = MaybeT $ return $ Just a
           mrequire False msg = MaybeT $ do putStrLn $ show msg
                                            return Nothing
-      primValue <- MaybeT $ V.unsafeWith vec $ \ptr -> do
+      primValue <- MaybeT $ do v <- readValue (fmType elem) rconf vec (lIxOf lmem)
+                               return (Just v)
+{-        V.unsafeWith vec $ \ptr -> do
        let ptrAdded = plusPtr ptr (lIxOf lmem)
        case (fmType elem) of
          PDouble -> do value <- peekElemOff (castPtr ptrAdded :: Ptr Double) 0
@@ -115,9 +117,9 @@ readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
                                  return $ Just $ PVCounter val n (PIntelCounter "" "" "")
          PCounter Nothing -> return $ Just $ PVCounter 0 0 PCNone
          PByte -> do val <- peekElemOff (castPtr ptrAdded :: Ptr Word8) 0
-                     return $ Just $ PVIntegral (fromIntegral val)
+                     return $ Just $ PVIntegral (fromIntegral val) -}
       let thisResult = FEValue <$> (pure primValue) <*> (findMember (frMemName lmem) layout) <*> pure lmem
-      rest <- readMember lmems layout v
+      rest <- readMember lmems rconf layout v
       --MaybeT $ do putStrLn $ "Got member: " ++ show primValue ++ " for found member " ++ (
       --              show $ findMember (frMemName lmem) layout) ++ " for layout mem " ++ show lmem
       --            return $ Just ()
@@ -125,10 +127,10 @@ readMember (lmem:lmems) layout v@(vec, tinfo, startOffset) =
         -- TODO: implement the rest of these.  Look at what I can do in Vector to read different types.
         -- this probably needs to move to IO (Maybe [FrameElementValue]) and use Ptr and cast to read
         -- what I want.
-    _ -> readMember lmems layout v
+    _ -> readMember lmems rconf layout v
 
-decodeFromBuffer :: TargetInfo -> V.Vector Word8 -> Int -> Int -> [FrameLayout] -> MaybeIO (FrameValue)
-decodeFromBuffer tinfo vec startOffset sz layouts =
+decodeFromBuffer :: ReadConfig -> V.Vector Word8 -> Int -> Int -> [FrameLayout] -> MaybeIO (FrameValue)
+decodeFromBuffer rinfo vec startOffset sz layouts =
   do let genSpec = layoutSpec $ head layouts
          size = genSpec ^.lioSize
          lIxOf mem = startOffset + (mem ^. lOffset)
@@ -178,7 +180,7 @@ decodeFromBuffer tinfo vec startOffset sz layouts =
 
      let layout = layouts !! frameType
      -- TODO: Go applicative on list constructor for members
-     members <- readMember (layout ^. flLayout) layout (vec, tinfo, startOffset)
+     members <- readMember (layout ^. flLayout) rinfo layout (vec, rinfo, startOffset)
      mlog $ "Got frame";
      return (FValue (layout ^. flFrame) members)
 
@@ -186,8 +188,8 @@ decodeFromBuffer tinfo vec startOffset sz layouts =
 -- TODO: Make this a lazy bytestring input, then use fromChunks to get
 -- out strict ByteStrings, and combine the chunks (copying only the
 -- bytes needed! as we cross boundaries.
-decodeFromBytes :: TargetInfo -> JsonRep -> BSL.ByteString -> IO ([FrameValue])
-decodeFromBytes tinfo json bytes = do
+decodeFromBytes :: ReadConfig -> JsonRep -> BSL.ByteString -> IO ([FrameValue])
+decodeFromBytes rinfo json bytes = do
   case frameSize json of
     Nothing -> return []
     Just frsize -> do
@@ -199,7 +201,7 @@ decodeFromBytes tinfo json bytes = do
 --        bslen `div` (fromIntegral frsize)) ++ " frames."
 --      putStrLn $ "started with ByteString of length " ++ (show bslen)
       let numRecords = fromIntegral (BSL.length bytes `div` (fromIntegral frsize))
-      res <- mapM (\idx -> runMaybeT $ decodeFromBuffer tinfo vec (idx * frsize) frsize frameLayouts) [0..numRecords]
+      res <- mapM (\idx -> runMaybeT $ decodeFromBuffer rinfo vec (idx * frsize) frsize frameLayouts) [0..numRecords]
       putStrLn $ " decoded " ++ show (length res) ++ " records:\n\t" ++ (L.intercalate "\n\t" $ map show res)
       return $ catMaybes res
 
@@ -236,12 +238,8 @@ decodeFile contents = do
       -- (3) the binary frames
       putStrLn $ "Got remaining " ++ (show $ BSL.length binaryFrames) ++ " for file after header."
       putStrLn $ "That should be " ++ (show $ ((fromIntegral $ BSL.length binaryFrames) / 4.0)) ++ " Ints."
-      decodeFromBytes (jsTarget $ frJson fileRecord) (frJson fileRecord) binaryFrames
-
--- We do a terrible job about supporting multiple platforms.  These
--- values don't indicate the actual sizes of some important stuff,
--- like time values or counters.
---x64 = TargetInfo 8 4 4 8 8 1
+      let rinfo = ReadConfig (jsTarget $ frJson fileRecord) undefined undefined
+      decodeFromBytes rinfo (frJson fileRecord) binaryFrames
 
 decodeFileToConsole :: String -> Int -> IO ()
 decodeFileToConsole filename maxNr = do
@@ -250,7 +248,7 @@ decodeFileToConsole filename maxNr = do
   putStrLn $ ">> " ++ (L.intercalate "\n>> " $ map descValue $ take maxNr values)
 
 -- Always returns the sequence number *first*.  Also assumes its first.
-decodeValue :: FrameValue -> (Int, [PrimitiveValue])
+decodeValue :: FrameValue -> (Int, [Prim])
 decodeValue (FValue fr ((FESeqno s):vals)) =
   (fromIntegral s, map getPrim vals)
   where getPrim (FEValue p _ _) = p
@@ -273,30 +271,33 @@ sortValues inputs =
       in HM.insertWith mergeEntry fr (makeEntry fr layoutMems seq row) mp
 
 -- |Show a raw value given a time representation config.
-showValue :: ETimeRep -> PrimitiveValue -> String
-showValue (ETimeSpec _) (PVTime a b) = show $ a * 1000000000 + b
-showValue (ETimeVal) (PVTime a b) = show $ a * 1000000 + b
-showValue _ (PVRational d) = show d
-showValue _ (PVIntegral i) = show i
-showValue _ (PVCounter v 0 (PIntelCounter name _ _)) = name ++ ": " ++ show v
-showValue _ (PVCounter v 1 (PIntelCounter _ name _)) = name ++ ": " ++ show v
-showValue _ (PVCounter v 2 (PIntelCounter _ _ name)) = name ++ ": " ++ show v
-showValue _ (PVCounter _ _ PCNone) = "0"
+showValue :: Prim -> String
+showValue (PTime (Just (ETimeSpec _, a, b))) = show $ a * 1000000000 + b
+showValue (PTime (Just (ETimeVal, a, b))) = show $ a * 1000000 + b
+showValue (PRational _ (Just d)) = show d
+showValue (PIntegral _ (Just i)) = show i
+{-
+showValue (PCounter v 0 (PPIntelCounter name _ _)) = name ++ ": " ++ show v
+showValue (PCounter v 1 (PPIntelCounter _ name _)) = name ++ ": " ++ show v
+showValue (PCounter v 2 (PPIntelCounter _ _ name)) = name ++ ": " ++ show v -}
+showValue (PCounter (Just (PPCNone, _))) = "0"
 
 -- |Currently does no processing. Opens 'filename' and writes out CSVs
 -- - one per found frame type - to 'destDir'.
-decodeFileToCSVs filename destDir = do
+decodeFileToCSVs filename destDir = undefined {-do
   let writeCsv dir (DFrame fr lmem rows) = do
-        let fileName = (_frameName fr) ++ ".csv"
+        let fileName = _frameName fr ++ ".csv"
             firstRow = head rows
-            elemName (FMemberElem (FMember _ n _)) = n
-            elemName (FCalculatedElem _ _ n _ _) = n
-            timeRep = headDef ETimeVal $ lmem ^.. folded.lType._PTime
-            headers = "ppt_seqno, " ++( L.intercalate ", " $ lmem ^.. folded.lName)
-            saveRow (DRow _ n vs) = L.intercalate ", " $ (show n):(map (showValue timeRep) vs)
+            nameOf :: LayoutMember -> String
+            nameOf lm =
+              if lm ^. lKind . is _lMember
+              then lm ^. lKind . _LMember .
+            nameOf lm = lm ^. lName
+            headers = "ppt_seqno, " ++  L.intercalate ", " (map nameOf $ lmem ^.. folded)
+            saveRow (DRow _ n vs) = L.intercalate ", " $ show n:map showValue vs
         h <- openFile (destDir ++ "/" ++ fileName) WriteMode
         hPutStrLn h headers
-        mapM_ (\r -> hPutStrLn h $ saveRow r) rows
+        mapM_ (hPutStrLn h . saveRow) rows
         hClose h
   -- This will fail quickly if we can't create the directory.
   createDirectory destDir
@@ -305,7 +306,7 @@ decodeFileToCSVs filename destDir = do
 --  let csvs = F.foldl' (\hm fv -> HM.insertWith (++) (_frameName $ _frame fv) [fv] hm) HM.empty values
   let csvs = sortValues values
   mapM_ (writeCsv destDir) csvs
-  return $ map (_frameName . _dFrame) csvs
+  return $ map (_frameName . _dFrame) csvs -}
 
 decodeCommand :: [String] -> IO ()
 decodeCommand [] = do

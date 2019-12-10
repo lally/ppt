@@ -15,20 +15,18 @@ import qualified Data.List as L
 import qualified Data.ByteString as BS
 import qualified Text.PrettyPrint as PP
 
---target = TargetInfo 8 4 8 16 8 1
-
 -- TODO(lally): Use inline-c and sizeof-ops to get this data.  Find a
 -- place for this.
-x64    = TargetInfo 8 4 4 8 8 1
+x64    = TargetInfo 8 4 4 8 8 1 3
 
 opts :: EmitOptions
-opts = (EmitOptions
+opts = EmitOptions
         (EBuffer "test" Nothing)
         ELangCpp
         (ETimeSpec ETimeClockRealtime)
         (ERuntime True)
         []
-        [])
+        []
 cfg = makeOutCfg opts []
 
 bimap :: Either a b -> (a -> c) -> (b -> d) -> Either c d
@@ -68,24 +66,24 @@ genFile str = do
   compiled <- compileFrames' x64  frames
   return $ cppFiles emitopts compiled
 
-mkInt n = FMemberElem $ FMember PInt n False
-mkTime n = FMemberElem $ FMember (PTime (ETimeSpec ETimeClockRealtime)) n True
+mkInt n = FMemberElem $ FMember (PIntegral PPInt Nothing) n False
+mkTime n = FMemberElem $ FMember (PTime (Just (ETimeSpec ETimeClockRealtime, 0, 0))) n True
 
 lshow :: LayoutMember -> String
-lshow (LMember ty off algn sz knd nm) = printf "%-20s off=%3d algn=%3d sz=%2d name=%-25s kind=%s" (show ty) off algn sz nm (show knd) 
+lshow (LMember ty off algn sz knd nm) = printf "%-20s off=%3d algn=%3d sz=%2d name=%-25s kind=%s" (show ty) off algn sz nm (show knd)
 
 evalLayout :: LayoutMember -> String
 evalLayout lmem =
   let alignCheck m =
         let sz = sizeOf x64 $ m ^. lType in
-          (if (m ^.lKind == LKPadding (m ^. lSize) || (m ^. lSize == sz))
-           then (if ((m ^. lOffset) `mod` (m ^. lAlignment) == 0)
+          (if m ^.lKind == LKPadding (m ^. lSize) || (m ^. lSize == sz)
+           then (if (m ^. lOffset) `mod` (m ^. lAlignment) == 0
                   then 0
                   else 2)
            else 1)
       prefix = let result = alignCheck lmem in (if result == 0
                                                 then " > good   "
-                                                else  (" > BAD(" ++ show result ++ ") "))
+                                                else  " > BAD(" ++ show result ++ ") ")
   in prefix ++ lshow lmem
 
 layoutData :: String -> [LayoutMember] -> IO ()
@@ -93,33 +91,31 @@ layoutData n elems = do
       let paddingSz' (LKPadding n) = n
           paddingSz' _ = 0
           paddingSz mem = paddingSz' $ mem ^. lKind
-          showPad :: Int -> String
-          showPad 0 = "   "
-          showPad n = printf "%3d" n
+          showPad (LKPadding n)
+            | n == 0 = "   "
+            | otherwise = printf "%03d" n
+          showPad _ = showPad (LKPadding 0)
       putStrLn $ " -- " ++ n ++ " -- "
-      putStrLn $ L.intercalate "\n" $ map (\s -> (showPad $paddingSz s) ++ evalLayout s) elems
-      putStrLn $ " Padding sum: " ++ (show $ sum $ map paddingSz elems) ++ ", alignment: " ++ (
-        show $ maximum $  elems ^..folded.lSize)
+      putStrLn $ L.intercalate "\n" $ map (\s -> showPad (s ^. lKind) ++ evalLayout s) elems
+      putStrLn $ " Padding sum: " ++ show (sum $ map paddingSz elems) ++ ", alignment: " ++ show (maximum $  elems ^..folded.lSize)
 
 showLayout :: [Frame] -> IO ()
 showLayout frames = do
   let result = compileFrames' x64 frames
   case result of
-    Left error -> do putStrLn error
-    Right flayouts -> do
+    Left error -> putStrLn error
+    Right flayouts ->
       mapM_ (\(FLayout n _ elems) -> layoutData n elems) flayouts
-      return ()
 
 showFrameLayouts :: [FrameLayout] -> IO ()
-showFrameLayouts layouts =
-  mapM_ (\(FLayout n _ elems) -> layoutData n elems) layouts
+showFrameLayouts = mapM_ (\(FLayout n _ elems) -> layoutData n elems)
 
 showLayoutData :: JsonRep -> IO ()
 showLayoutData j = do
   putStrLn "Frame Layouts"
   showFrameLayouts (jsBufferFrames j)
   putStrLn "\nUnderlying Frames"
-  showLayout ((jsBufferFrames j) ^..folded.flFrame)
+  showLayout (jsBufferFrames j ^..folded.flFrame)
   return ()
 
 
@@ -131,4 +127,4 @@ breakCsv s =
                            _:s''   -> lines s''))
  where
    cons ~(h, t)        =  h : t
-   
+

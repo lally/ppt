@@ -8,7 +8,9 @@ import Data.Aeson                             (decode, encode)
 import Data.ByteString.Lazy.Char8             (pack, unpack)
 import Data.List
 import Data.Maybe                             (catMaybes, mapMaybe)
+import Ppt.Frame.Types
 import Ppt.Frame.ParsedRep
+import Safe
 import Text.ParserCombinators.Parsec          (GenParser, ParseError, alphaNum, char,
                                                digit, eof, many, many1, noneOf, sepBy1,
                                                string, try, (<?>), (<|>))
@@ -43,10 +45,10 @@ ch = char
 
 type Parser t = GenParser Char () t
 
-primType o = ( resvd "double" >> return PDouble )
-             <|> ( resvd "int" >> return PInt )
-             <|> ( resvd "float" >> return PFloat )
-             <|> ( resvd "time" >> return (PTime (_eTimeRep o)))
+primType o = ( resvd "double"      >> return (PRational PPDouble Nothing))
+             <|> ( resvd "int"     >> return (PIntegral PPInt Nothing))
+             <|> ( resvd "float"   >> return (PRational PPFloat Nothing ))
+             <|> ( resvd "time"    >> return (PTime Nothing))
              <|> ( resvd "counter" >> return (PCounter Nothing))
              <?> "type name"
 -- TODO: replace primType here with a higher-level production that
@@ -234,9 +236,7 @@ optionCombine opts = let
 
 optionUpdate :: EmitOptions -> [PartialOption] -> EmitOptions
 optionUpdate base opts =
-  let mLast [] = Nothing
-      mLast xs = Just (last xs)
-      -- Pattern:
+  let -- Pattern:
       -- 'ins' here will be 'opts' above.
       replace inpl outl ins outs =
         let override = lastOf (traverse . inpl) ins

@@ -7,6 +7,8 @@ import Ppt.Frame.Layout
 import Prelude hiding ((<>))
 import Text.PrettyPrint ((<>),(<+>))
 
+import Control.Lens
+import Data.Maybe
 import Ppt.Generate.CpConfig
 import qualified Data.List as L
 import qualified Text.PrettyPrint as PP
@@ -64,24 +66,80 @@ qualBlock cfg ((PrivMember n):ns) =
       suffix = drop (length pubPrefix) ns
   in docPrivate:(formatMems cfg (n:pubPrefix)) ++ qualBlock cfg suffix
 
-
 -- |Make member declarations out of a single literal (layed out) input member.
 makeMember :: OutputCfg -> LayoutMember -> MemberData
-makeMember cfg (LMember (PTime _) _ _ _ _ nm) =
-  let timety = timeType cfg
-      timeheaders = [timeHeader cfg]
-  in (MB [blockdecl cfg (PP.text $ "void snapshot_" ++ nm ++ "()") PP.semi [
-             timeSave cfg nm]]
-         (dataMember timety nm) timeheaders [])
+makeMember cfg mem
+  | has (lKind . _LKMember) mem =
+    let mt = mem ^. memPrim
+        nm = mem ^. lName
+    in case mt of
+      PTime _ ->
+        let timety = timeType cfg
+            timeheaders = [timeHeader cfg]
+        in MB [blockdecl cfg (PP.text $ "void snapshot_" ++ (mem ^. lName) ++ "()") PP.semi [
+                  timeSave cfg nm]]
+           (dataMember timety nm) timeheaders []
+      PRational _ _ -> undefined
+      PCounter _ ->
+        let maxCounterIdx = (counterCount cfg) - 1
+            indices = [0 .. maxCounterIdx]
+            (LKMember frmem side) = mem ^. lKind
+            baseName = fmName frmem
+            memSfx = if defaultInit cfg then "= 0" else ""
+            counterFor n = (case side of
+                    Nothing -> baseName ++  "_" ++ show n
+                    Just (IntBegin a b) -> baseName ++ (if b > 1 then ("_" ++ show n) else "") ++ "_start"
+                    Just (IntEnd a b) -> baseName ++ (if b > 1 then ("_" ++ show n) else "") ++ "_end")
+            functionsBaseName = case side of
+              Nothing -> baseName
+              Just (IntBegin _ _) -> baseName ++ "_start"
+              Just (IntEnd _ _) -> baseName ++ "_end"
+            saveFn = let args = L.intercalate ", " $ map (\i -> "&" ++ (counterFor i)) $ indices
+                         static_savectrs = blockdecl cfg (PP.text $ "void snapshot_" ++ functionsBaseName ++ "()") PP.empty [
+                           stmt $ "save_counters(" ++ args ++ ")"]
+                     in
+                     if nativeCounters cfg
+                     then
+                      let labelFor n = "__ppt_" ++ (bufName cfg) ++ "_" ++ nm ++ "_Load_" ++ show (n+1) ++ "_counters"
+                          pfxConds = [blockdecl cfg (
+                                         PP.text $ "if (_ppt_ctrl == nullptr || data_" ++ (bufName cfg) ++ "::ppt_counter_fd[0] < 1)") PP.empty [
+                                         stmt "return"],
+                                      blockdecl cfg (
+                                         PP.text $ "if ((_ppt_ctrl->client_flags & PERF_CTR_NATIVE_ENABLED) == 0)") PP.empty [
+                                         stmt $ "save_counters(" ++ args ++ ")"]
+                                     ]
+                          condFor n = blockdecl cfg (PP.text $ "if (data_" ++ (bufName cfg) ++ "::ppt_counter_fd[" ++
+                                                     show n ++ "] > 0)") PP.empty [
+                            stmt $ "goto " ++ labelFor n
+                            ]
+                          sfxCond = blockdecl cfg (PP.text "else") PP.empty [ stmt $ "goto " ++ labelFor 0 ]
+                          condCat conds = PP.vcat (head conds : (map (\c -> PP.text "else " <> c) $ tail conds))
+                          loadFor n = [(PP.text $ labelFor n) <> ":",
+                                       stmt $ "__asm__ volatile(\"rdpmc\" :  \"=a\" (a), \"=d\" (d) : \"c\" (data_" ++
+                                          (bufName cfg) ++ "::ppt_counter_rcx[" ++ show n ++ "]))",
+                                       stmt $ (counterFor n) ++ " = a | (static_cast<uint64_t>(d) << 32ULL)" ]
+                          revIndices = reverse indices
+                      in blockdecl cfg (PP.text $ "void snapshot_" ++ functionsBaseName ++ "()") PP.empty (
+                        pfxConds ++ 
+                        ( condCat (map condFor $ init revIndices)
+                        : sfxCond
+                        : (stmt "uint32_t a,d":(concatMap loadFor revIndices))))
+                    else
+                      static_savectrs
+            headers = if nativeCounters cfg then [ "sys/mman.h"] else []
+        in MB [saveFn] (dataMember "uint64_t" (nm ++ memSfx)) headers [GMCounters]
+      PIntegral PPInt _ -> undefined
+      PIntegral PPByte _ -> undefined -- This is for declared members only, so this is a bit strange. 
+
 
 -- These should have been layed out by now!
-makeMember cfg (LMember (PCounter Nothing) _ _ _ k nm) = undefined
+--makeMember cfg (LMember (PCounter Nothing) _ _ _ k nm) = undefined
 --  MB [] (dataMember "uint64_t" (nm ++ "[" ++ (show $ counterCount cfg) ++ "]")) [] [GMCounters]
-makeMember cfg (LMember PByte _ _ _ (LKPadding n) nm) =
-  PrivateMem (dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")) ["cstdint"] []
+--makeMember cfg (LMember PByte _ _ _ (LKPadding n) nm) =
+--  PrivateMem (dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")) ["cstdint"] []
 
-makeMember cfg (LMember (PCounter (Just 0)) _ _ _ (LKMember frmem side) nm) =
   {-
+makeMember cfg (LMember (PCounter (Just 0)) _ _ _ (LKMember frmem side) nm) =
    -- For native:
     if (data_BUFNAME::ppt_counter_fd[2] != -1) {
        goto __ppt_NM_Load3;
@@ -108,7 +166,6 @@ makeMember cfg (LMember (PCounter (Just 0)) _ _ _ (LKMember frmem side) nm) =
    -- For syscall:
    save_counters(&v0, &v1, &v2);
 
-  -}
   let maxCounterIdx = (counterCount cfg) - 1
       indices = [0 .. maxCounterIdx]
       baseName = fmName frmem
@@ -174,6 +231,7 @@ makeMember cfg (LMember ty _ _ _ _ nm) =
   let declType = case ty of
         PInt -> "int"
   in PrivateMem (dataMember declType nm) [] []
+  -}
 
 sequenceDecls :: [Decl] -> [Decl]
 sequenceDecls frameDecls =

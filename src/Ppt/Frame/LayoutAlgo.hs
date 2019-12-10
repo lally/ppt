@@ -69,10 +69,13 @@ instance Show FrameMemberBlock where
 -- should only do the move if, after scanning for how much it can
 -- take, it can reduce padding.
 
+intType = PIntegral PPInt Nothing
+byteType = PIntegral PPByte Nothing
+
 alignOfAll :: TargetInfo -> [FrameMember] -> Int
 alignOfAll tinfo frames = maximum $ padSz:sizes
   where
-    padSz = sizeOf tinfo PInt  -- for seqno / type descrim
+    padSz = sizeOf tinfo intType -- for seqno / type descrim
     sizes = map ((alignOf tinfo) . fmType) frames
 
 -- |Takes from the first list until the function returns False.  Then
@@ -150,7 +153,7 @@ layoutMember tinfo fr@(FMember ty nm True) =
       if n /= Nothing
       then fail "Got allocated PCounter during layout"
       else -- replicate this.
-        concatMap (\i -> makePair (PCounter (Just i)) i 3) [0..2]
+        concatMap (\i -> makePair (PCounter Nothing) i 3) [0..(tCounterCount tinfo)]
     _ -> makePair ty 0 1
   where sz = sizeOf tinfo ty
         algn = alignOf tinfo ty
@@ -168,9 +171,9 @@ extractBlock :: TargetInfo -> Int -> Frame -> FrameMemberBlock
 extractBlock tinfo nr f@(Frame n mems) =
   let seqName FrontSeq = "__ppt_seqno"
       seqName BackSeq = "__ppt_seqno_back"
-      seqNo t = LMember PInt 0 (tInt tinfo) (tInt tinfo) (LKSeqno t) $ seqName t
+      seqNo t = LMember intType 0 (tInt tinfo) (tInt tinfo) (LKSeqno t) $ seqName t
       front = if nr > 1
-              then (8, [seqNo FrontSeq, LMember PInt 0 (tInt tinfo) (tInt tinfo) (LKTypeDescrim nr)
+              then (8, [seqNo FrontSeq, LMember intType 0 (tInt tinfo) (tInt tinfo) (LKTypeDescrim nr)
                          "__ppt_type"])
               else (4, [seqNo FrontSeq])
       back = (4, [seqNo BackSeq])
@@ -194,7 +197,7 @@ interPad off (t:ts)
   | otherwise =
     let algn = t ^. lAlignment
         padAmt = algn - (off `mod` algn)
-        padMem = LMember (PByte) off 1 padAmt (LKPadding padAmt) ("__pad_" ++ show off)
+        padMem = LMember byteType off 1 padAmt (LKPadding padAmt) ("__pad_" ++ show off)
     in {-traceShow ("Padding by ", padAmt, off, t) $ -} padMem:(
       interPad (off + padAmt) (t:ts))
 
@@ -211,7 +214,7 @@ backPad fmb desiredSz =
       sz = (\m -> m ^. lOffset + m ^. lSize) $ last mems
       deltaSz = desiredSz - sz
   in if deltaSz > 0
-     then {-traceShow ("last mem:", last mems, " delta: ", deltaSz) $ -}[LMember PByte sz 1 deltaSz (LKPadding deltaSz) (
+     then {-traceShow ("last mem:", last mems, " delta: ", deltaSz) $ -}[LMember byteType sz 1 deltaSz (LKPadding deltaSz) (
               "__ppt_endpad_" ++ show deltaSz)]
      else if deltaSz == 0
           then []
@@ -221,6 +224,12 @@ makeFLayout :: Int -> FrameMemberBlock -> Either String FrameLayout
 makeFLayout sz fmb =
   Right $ (FLayout (_frName fmb) (_frFrame fmb) $ interPad 0 (_frFront fmb ++ _frInternalElements fmb
                                                          ++ (backPad fmb sz) ++ _frBack fmb))
+
+-- |Round up 'val' to be aligned on an 'align' boundary.
+roundTo :: (Integral n) => n -> n -> n
+roundTo align val
+ | (val `mod` align) == 0 = val
+ | otherwise = val + (align - (val `mod` align))
 
 -- Terminology: a member block is all of the members of a frame, in FrameMemberBlocks.
 --  An alignment block list is a grouping of members into alignment-sized blocks.

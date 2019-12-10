@@ -6,53 +6,28 @@ import GHC.Generics
 import Data.Aeson
 import Data.Hashable
 import Data.Word
+import Ppt.Frame.Types
 import Control.Lens hiding (element, noneOf)
 {- |Parsing, Calculation, and Layout
 
  Ppt builds a buffer specification from its individual Frames.  It
  parses a Frame specification into a Layout that's got enough
- information for code generation and for placing into the buffer.
+n information for code generation and for placing into the buffer.
 -}
 
-data PCounterConfig = PCNone
-                    | PIntelCounter String String String
-                    -- ^Three counter names (libpfm4 syntax)
-                    deriving (Generic, Eq, Show)
 
 -- |Common to both Parsed Rep and Machine Layout.  Presumed x86_64 type sizes.
 -- |Used in evaluation.  Some types are promoted.  PrimType paired with a value.
-data PrimitiveValue = PVRational Double
+{-data PrimitiveValue = PVRational Double
                     | PVIntegral Int
                     | PVTime Int Int
                     | PVCounter Word64 Int PCounterConfig
                     -- ^Value, index, config it's filling in.
                     deriving (Generic, Eq, Show)
-
+-}
 -- |Parsed Representation
 data ELanguage = ELangC | ELangCpp deriving (Generic, Eq, Show)
 
--- |For ETimeSPec, which kind of clock to ask from clock_gettime()
-data ETimeSource = ETimeClockRealtime
-                 | ETimeClockRealtimeCoarse
-                 | ETimeClockMonotonic
-                 | ETimeClockMonotonicCoarse
-                 | ETimeClockMonotonicRaw
-                 | ETimeClockBoottime
-                 | ETimeClockProcessCputimeId
-                 | ETimeClockThreadCputimeId
-                 deriving (Generic, Eq, Show)
-
--- |gettimeofday() vs clock_gettime()
-data ETimeRep = ETimeVal | ETimeSpec ETimeSource deriving (Generic, Eq, Show)
-
-data Primitive = PDouble
-               | PFloat
-               | PInt
-               | PTime ETimeRep  -- ^The format stored.
-               | PCounter (Maybe Int)  -- ^The index of the counter (we store several)
-               | PByte
-               deriving (Generic, Eq, Show)
-makePrisms ''Primitive
 
 data ERuntime = ERuntime { erMultithread :: Bool } deriving (Generic, Eq, Show)
 data ETag = Tag String String -- ^Key, Value
@@ -81,7 +56,7 @@ makeLenses ''EmitOptions
 -- standalone members /or/ a differential.  In the latter case, a
 -- single differential declaration in the original specification can
 -- result in multiple members in the layout.
-data FrameMember = FMember { fmType :: Primitive
+data FrameMember = FMember { fmType :: Prim
                            , fmName :: String
                            , fmDifferential :: Bool}
                  deriving (Generic, Eq, Show)
@@ -105,7 +80,7 @@ data FrameCalculation = FValue FrameMember
 -- powerful part of the language.
 data FrameElement = FMemberElem FrameMember
                     -- ^Saved at runtime.
-                  | FCalculatedElem { fcResultType :: Primitive
+                  | FCalculatedElem { fcResultType :: Prim
                                     , fcOperation :: FrameCalculation
                                     , fcFieldName :: String
                                     , fcLiveReport :: Bool
@@ -129,7 +104,18 @@ data FrameElement = FMemberElem FrameMember
 
 --data FrameEvaluator = FEvaluate { feValues :: Map String PrimitiveValue }
 data Frame = Frame { _frameName :: String
-                   , _frameElements :: [FrameElement] } deriving (Generic, Eq, Show)
+                   , _frameElements :: [FrameElement]
+                   } deriving (Generic, Eq, Show)
+makeLenses ''Frame
+
+type LayoutKind = GenLayoutKind FrameMember
+type LayoutMember = GenLayoutMember FrameMember
+type FrameLayout = GenFrameLayout Frame FrameMember
+
+memPrim :: Lens' LayoutMember Prim
+memPrim = lens read write
+  where read (LMember t _ _ _ _ _) = t
+        write m@(LMember t _ _ _ _ _) u = m{ _lType = u }
 
 -- Look into AESON-ing this thing, to serialize into the generated
 -- source, and to shove into generated output for python
@@ -139,9 +125,10 @@ data Buffer = Buffer EmitOptions [Frame] deriving (Generic, Eq, Show)
 instance Hashable Frame where
   hashWithSalt salt f = hashWithSalt salt (_frameName f)
 
-instance ToJSON Primitive
+instance ToJSON PIPrecision
+instance ToJSON PFPPrecision
 instance ToJSON PCounterConfig
-instance ToJSON PrimitiveValue
+instance ToJSON Prim
 instance ToJSON ELanguage
 instance ToJSON ETimeSource
 instance ToJSON ETimeRep
@@ -158,9 +145,10 @@ instance ToJSON FrameElement
 instance ToJSON Frame
 instance ToJSON Buffer
 
-instance FromJSON Primitive
+instance FromJSON PIPrecision
+instance FromJSON PFPPrecision
 instance FromJSON PCounterConfig
-instance FromJSON PrimitiveValue
+instance FromJSON Prim
 instance FromJSON ELanguage
 instance FromJSON ETimeSource
 instance FromJSON ETimeRep

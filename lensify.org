@@ -14,7 +14,7 @@
 *** Layout Operations
     - Calculate Padding
     - Fetch data from stream!
-      - This is the big one.   
+      - This is the big one.
       - Make a lens for each LayoutMember, and have it let me directly
         read/write =Primitive= wrappers?.
         Type: =Lens ByteStream PrimitiveValue=

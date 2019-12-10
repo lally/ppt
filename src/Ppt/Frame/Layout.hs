@@ -8,11 +8,13 @@ import Control.Monad
 import Data.Aeson
 import Data.Either
 import Data.Typeable
+import Safe
 import Debug.Trace
 import GHC.Generics
 import qualified Data.List as L
 import qualified Data.HashMap.Strict as HM
 
+import Ppt.Frame.Prim
 import Ppt.Frame.Types
 import Ppt.Frame.ParsedRep
 
@@ -33,37 +35,37 @@ data JsonRep = JsonRep { jsAbi :: String
 
 layoutSpec :: FrameLayout -> LayoutIOSpec
 layoutSpec layout =
-  let sumSize = sum $ layout ^.. flLayout . folded . lSize -- map (view (flLayout . lSize)) layout
+  let sumSize = sum $ layout ^.. flLayout . folded . lSize
       lastMem = last $ layout ^. flLayout
       backOff = case lastMem of
                   (LMember _ off _ _ (LKSeqno BackSeq) _) -> off
   in LayoutIO sumSize backOff
 
-sizeOf :: TargetInfo -> Primitive -> Int
-sizeOf info PDouble = tDouble info
-sizeOf info PFloat = tFloat info
-sizeOf info PInt = tInt info
-sizeOf info (PTime _) = tTime info
-sizeOf info (PCounter _) = tCounter info
-sizeOf info PByte = 1
+sizeOf :: TargetInfo -> Prim -> Int
+sizeOf info p =
+  case (pType p) of
+    PRational PPDouble _ -> tDouble info
+    PRational PPFloat _ -> tFloat info
+    PIntegral PPInt _ -> tInt info
+    PIntegral PPByte _ -> 1
+    PTime _ -> tTime info
+    PCounter _ -> tCounter info
 
-alignOf :: TargetInfo -> Primitive -> Int
-alignOf info PDouble = tDouble info
-alignOf info PFloat = tFloat info
-alignOf info PInt = tInt info
-alignOf info (PTime _) = tCounter info
-alignOf info (PCounter _)= tCounter info
-alignOf info PByte = 1
+alignOf :: TargetInfo -> Prim -> Int
+alignOf info p =
+  case (pType p) of
+    PRational PPDouble _ -> tDouble info
+    PRational PPFloat _ -> tFloat info
+    PIntegral PPInt _ -> tInt info
+    PIntegral PPByte _ -> 1
+    PTime _ -> tTime info
+    PCounter _ -> tCounter info
 
+-- |Indicates the amount of space in the last 'align'-sized block that 'amt' takes.
 alignRemainder :: Int -> Int -> Int
 alignRemainder align amt
   | align == amt = 0
   | otherwise = align - (amt `mod` align)
-
-roundTo :: (Integral n) => n -> n -> n
-roundTo align val
- | (val `mod` align) == 0 = val
- | otherwise = val + (align - (val `mod` align))
 
 serializeOffsets :: TargetInfo -> [LayoutMember] -> [LayoutMember]
 serializeOffsets target inmems =
@@ -73,34 +75,28 @@ serializeOffsets target inmems =
         in (m {_lOffset = pfx }):(serialize tinfo nextElemSize mems)
   in serialize target 0 inmems
 
-mlast :: [a] -> Maybe a
-mlast [] = Nothing
-mlast [x] = Just x
-mlast (a:as) = mlast as
-
 -- |Determine the single-member element size of the shared memory
 -- segment.  In units of 32-bit words.
 frameSize :: JsonRep -> Maybe Int
 frameSize json =
   let emit = jsBufferEmit json
       frames = jsBufferFrames json
-  in do aFrame <- mlast frames
-        lastMem <- mlast $ aFrame ^. flLayout
+  in do aFrame <- lastMay frames
+        lastMem <- lastMay $ aFrame ^. flLayout
         return (lastMem ^. lOffset + lastMem ^. lSize)
 
--- Then get theem padded to the same size.
 instance ToJSON SeqNoSide
 instance ToJSON IntervalSide
-instance ToJSON LayoutKind
-instance ToJSON LayoutMember
-instance ToJSON FrameLayout
+instance (ToJSON d) => ToJSON (GenLayoutKind d)
+instance (ToJSON d) => ToJSON (GenLayoutMember d)
+instance (ToJSON d, ToJSON f) => ToJSON (GenFrameLayout f d)
 instance ToJSON TargetInfo
 
 instance FromJSON SeqNoSide
 instance FromJSON IntervalSide
-instance FromJSON LayoutKind
-instance FromJSON LayoutMember
-instance FromJSON FrameLayout
+instance (FromJSON d) => FromJSON (GenLayoutKind d)
+instance (FromJSON d) => FromJSON (GenLayoutMember d)
+instance (FromJSON d, FromJSON f) => FromJSON (GenFrameLayout d f)
 instance FromJSON TargetInfo
 
 instance ToJSON JsonRep where

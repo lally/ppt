@@ -31,6 +31,7 @@ library
                        , Ppt.Frame.Types
                        , Ppt.Frame.Util
                        , Ppt.ElfProcess
+                       , Ppt.Frame.Prim
 
   build-depends:       HStringTemplate
                      , MissingH
