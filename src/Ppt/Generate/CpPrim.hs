@@ -32,6 +32,7 @@ data MemberData = MB { mbMethods ::[PP.Doc], mbMember :: PP.Doc, mbHeaders :: [S
 data QualMember = PubMember PP.Doc
                 | PrivMember PP.Doc
                 deriving (Eq, Show)
+
 data Decl  = ClassDecl { cName :: String
                        , cNr :: Maybe Int
                        , cMembers :: [QualMember]
@@ -69,6 +70,16 @@ qualBlock cfg ((PrivMember n):ns) =
 -- |Make member declarations out of a single literal (layed out) input member.
 makeMember :: OutputCfg -> LayoutMember -> MemberData
 makeMember cfg mem
+  | has (lKind . _LKSeqno) mem || has (lKind . _LKTypeDescrim) mem  =
+    let (LMember (PIntegral ty _) _ _ _ _ nm) = mem
+        declType = case ty of
+          PPInt -> "int"
+    in PrivateMem (dataMember declType nm) [] []
+
+  | has (lKind . _LKPadding) mem =
+    let (LMember (PIntegral PPByte _) _ _ _ (LKPadding n) nm) = mem
+    in  PrivateMem (dataMember "uint8_t"  (nm ++ "[" ++ show n ++ "]")) ["cstdint"] []
+
   | has (lKind . _LKMember) mem =
     let mt = mem ^. memPrim
         nm = mem ^. lName
@@ -79,13 +90,18 @@ makeMember cfg mem
         in MB [blockdecl cfg (PP.text $ "void snapshot_" ++ (mem ^. lName) ++ "()") PP.semi [
                   timeSave cfg nm]]
            (dataMember timety nm) timeheaders []
-      PRational _ _ -> undefined
       PCounter _ ->
         let maxCounterIdx = (counterCount cfg) - 1
             indices = [0 .. maxCounterIdx]
             (LKMember frmem side) = mem ^. lKind
             baseName = fmName frmem
+            bname = bufName cfg
             memSfx = if defaultInit cfg then "= 0" else ""
+            elideDecls = case side of
+              Nothing -> False
+              Just (IntBegin 0 _) -> False
+              Just (IntEnd 0 _) -> False
+              _ -> True
             counterFor n = (case side of
                     Nothing -> baseName ++  "_" ++ show n
                     Just (IntBegin a b) -> baseName ++ (if b > 1 then ("_" ++ show n) else "") ++ "_start"
@@ -100,37 +116,45 @@ makeMember cfg mem
                      in
                      if nativeCounters cfg
                      then
-                      let labelFor n = "__ppt_" ++ (bufName cfg) ++ "_" ++ nm ++ "_Load_" ++ show (n+1) ++ "_counters"
+                      let labelFor n = "__ppt_" ++ bname ++ "_" ++ nm ++ "_Load_" ++ show (n+1) ++ "_counters"
                           pfxConds = [blockdecl cfg (
-                                         PP.text $ "if (_ppt_ctrl == nullptr || data_" ++ (bufName cfg) ++ "::ppt_counter_fd[0] < 1)") PP.empty [
+                                         PP.text $ "if (_ppt_ctrl == nullptr || data_" ++ bname ++ "::ppt_counter_fd[0] < 1)") PP.empty [
                                          stmt "return"],
                                       blockdecl cfg (
-                                         PP.text $ "if ((_ppt_ctrl->client_flags & PERF_CTR_NATIVE_ENABLED) == 0)") PP.empty [
+                                         PP.text "if ((_ppt_ctrl->client_flags & PERF_CTR_NATIVE_ENABLED) == 0)") PP.empty [
                                          stmt $ "save_counters(" ++ args ++ ")"]
                                      ]
-                          condFor n = blockdecl cfg (PP.text $ "if (data_" ++ (bufName cfg) ++ "::ppt_counter_fd[" ++
+                          condFor n = blockdecl cfg (PP.text $ "if (data_" ++ bname ++ "::ppt_counter_fd[" ++
                                                      show n ++ "] > 0)") PP.empty [
                             stmt $ "goto " ++ labelFor n
                             ]
                           sfxCond = blockdecl cfg (PP.text "else") PP.empty [ stmt $ "goto " ++ labelFor 0 ]
                           condCat conds = PP.vcat (head conds : (map (\c -> PP.text "else " <> c) $ tail conds))
-                          loadFor n = [(PP.text $ labelFor n) <> ":",
+                          loadFor n = [PP.text (labelFor n) <> ":",
                                        stmt $ "__asm__ volatile(\"rdpmc\" :  \"=a\" (a), \"=d\" (d) : \"c\" (data_" ++
-                                          (bufName cfg) ++ "::ppt_counter_rcx[" ++ show n ++ "]))",
-                                       stmt $ (counterFor n) ++ " = a | (static_cast<uint64_t>(d) << 32ULL)" ]
+                                          bname ++ "::ppt_counter_rcx[" ++ show n ++ "]))",
+                                       stmt $ counterFor n ++ " = a | (static_cast<uint64_t>(d) << 32ULL)" ]
                           revIndices = reverse indices
                       in blockdecl cfg (PP.text $ "void snapshot_" ++ functionsBaseName ++ "()") PP.empty (
-                        pfxConds ++ 
+                        pfxConds ++
                         ( condCat (map condFor $ init revIndices)
                         : sfxCond
-                        : (stmt "uint32_t a,d":(concatMap loadFor revIndices))))
+                        : stmt "uint32_t a,d":concatMap loadFor revIndices))
                     else
                       static_savectrs
-            headers = if nativeCounters cfg then [ "sys/mman.h"] else []
-        in MB [saveFn] (dataMember "uint64_t" (nm ++ memSfx)) headers [GMCounters]
-      PIntegral PPInt _ -> undefined
-      PIntegral PPByte _ -> undefined -- This is for declared members only, so this is a bit strange. 
+            headers = [ "sys/mman.h" | nativeCounters cfg ]
+        in MB [saveFn | not elideDecls] (dataMember "uint64_t" (nm ++ memSfx)) headers [GMCounters]
+      PRational ty _ -> let declType = case ty of
+                                         PPDouble -> "double"
+                                         PPFloat -> "float"
+                            memSfx = if defaultInit cfg then "= 0" else ""
+                        in MB [] (dataMember declType (nm ++ memSfx)) [] []
 
+      PIntegral ty _ -> let declType = case ty of
+                                         PPByte -> "int32_t"
+                                         PPInt -> "uint8_t"
+                            memSfx = if defaultInit cfg then "= 0" else ""
+                        in MB [] (dataMember declType (nm ++ memSfx)) [] []
 
 -- These should have been layed out by now!
 --makeMember cfg (LMember (PCounter Nothing) _ _ _ k nm) = undefined

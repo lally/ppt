@@ -2,6 +2,7 @@ module Ppt.ParserGen where
 
 import Test.QuickCheck
 import System.Random
+import Ppt.Frame.Prim
 import Ppt.Frame.ParsedRep
 
 instance Random ETimeRep where
@@ -38,21 +39,23 @@ instance Random ETimeRep where
 instance Arbitrary ETimeRep where
   arbitrary = choose (ETimeVal, ETimeSpec ETimeClockThreadCputimeId)
 
-instance Random Primitive where
+instance Random Prim where
   randomR (s, e) gen =
-    let intify PDouble = 0
-        intify PFloat = 1
-        intify PInt = 2
+    let intify (PRational PPDouble _) = 0
+        intify (PRational PPFloat _) = 1
+        intify (PIntegral PPInt _) = 2
+        intify (PIntegral PPByte _) = 5
         intify (PTime _) = 3
         intify (PCounter _) = 4
-        intify PByte = 5
-        primify 0 = (\g -> (PDouble, g))
-        primify 1 = (\g -> (PFloat, g))
-        primify 2 = (\g -> (PInt, g))
+        primify :: (RandomGen g) => Int -> g -> (Prim, g)
+        primify 0 = (\g -> let (rv, g') = next g in (PRational PPDouble (Just $ fromIntegral rv), g'))
+        primify 1 = (\g -> let (rv, g') = next g in (PRational PPFloat (Just $ fromIntegral rv), g'))
+        primify 2 = (\g -> let (rv, g') = next g in (PIntegral PPInt (Just rv), g'))
         primify 3 = (\g -> let (tr, g')= random g -- :: RandomGen a => (ETimeRep, a)
-                            in (PTime tr, g'))
-        primify 4 = (\g -> (PCounter Nothing, g))
-        primify 5 = (\g -> (PByte, g))
+                               (rv, g'') = next g'
+                            in (PTime (Just (tr, rv, rv)), g''))
+        primify 4 = (\g -> (PCounter (Just (PPCNone, [])), g))
+        primify 5 = (\g -> let (rv, g') = random g in (PIntegral PPByte (Just rv), g'))
         start_v = intify s
         end_v = intify e
         start = min start_v end_v
@@ -60,10 +63,10 @@ instance Random Primitive where
         (ival, gen') = next gen
         (result, gen'') = (primify (start + (ival `mod` (end - start)))) gen'
     in (result, gen'')
-  random = randomR (PDouble, PByte)
+  random = randomR (PRational PPDouble Nothing, PIntegral PPByte Nothing)
 
-generatePrimitive :: Gen Primitive
-generatePrimitive = choose (PDouble, PByte)
+generatePrimitive :: Gen Prim
+generatePrimitive = choose (PRational PPDouble Nothing, PIntegral PPByte Nothing)
 
 generateIdentifier :: Gen String
 generateIdentifier = listOf1 $ elements ['a','b','c','d','e','f','g','h','i','j','k','l','m',
@@ -85,7 +88,7 @@ generateFrame = do
 --  let headElement = 
   return $ Frame nm frelems
 
-instance Arbitrary Primitive where
+instance Arbitrary Prim where
   arbitrary = generatePrimitive
 
 instance Arbitrary FrameElement where

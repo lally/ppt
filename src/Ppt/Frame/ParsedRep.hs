@@ -16,15 +16,6 @@ n information for code generation and for placing into the buffer.
 -}
 
 
--- |Common to both Parsed Rep and Machine Layout.  Presumed x86_64 type sizes.
--- |Used in evaluation.  Some types are promoted.  PrimType paired with a value.
-{-data PrimitiveValue = PVRational Double
-                    | PVIntegral Int
-                    | PVTime Int Int
-                    | PVCounter Word64 Int PCounterConfig
-                    -- ^Value, index, config it's filling in.
-                    deriving (Generic, Eq, Show)
--}
 -- |Parsed Representation
 data ELanguage = ELangC | ELangCpp deriving (Generic, Eq, Show)
 

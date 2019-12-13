@@ -83,41 +83,20 @@ frMemName fl = case (fl ^. lKind) of
 readMember :: [LayoutMember] -> ReadConfig -> FrameLayout -> (V.Vector Word8, ReadConfig, Int) -> MaybeIO ( [FrameElementValue])
 readMember [] _ _ _ = do return []
 readMember (lmem:lmems) rconf layout v@(vec, rinfo, startOffset) =
-  case (lmem ^. lKind) of
-    (LKSeqno FrontSeq) -> do
+  case lmem ^. lKind of
+    LKSeqno FrontSeq -> do
       primValue <- MaybeT $ V.unsafeWith vec $ \ptr -> do
         value <- peekElemOff (castPtr (plusPtr ptr startOffset) :: Ptr Word32) 0
         return $ Just value
       rest <- readMember lmems rconf layout v
       MaybeT $ return $ (:) <$> (pure $ FESeqno primValue) <*> (pure rest)
-    (LKMember elem _) -> do
+    LKMember elem _ -> do
       let lIxOf mem = startOffset + (mem ^. lOffset)
           mrequire :: Show a => Bool -> a -> MaybeIO a
           mrequire True a = MaybeT $ return $ Just a
           mrequire False msg = MaybeT $ do putStrLn $ show msg
                                            return Nothing
-      primValue <- MaybeT $ do v <- readValue (fmType elem) rconf vec (lIxOf lmem)
-                               return (Just v)
-{-        V.unsafeWith vec $ \ptr -> do
-       let ptrAdded = plusPtr ptr (lIxOf lmem)
-       case (fmType elem) of
-         PDouble -> do value <- peekElemOff (castPtr ptrAdded :: Ptr Double) 0
-                       return $ Just $ PVRational value
-         PFloat -> do value <- peekElemOff (castPtr ptrAdded :: Ptr Float) 0
-                      return $ Just $ PVRational $ float2Double value
-         PInt -> do value <- peekElemOff (castPtr ptrAdded :: Ptr Word32)  0
-                    return $ Just $ PVIntegral $ fromIntegral value
-         PTime (ETimeSpec _) -> do high <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
-                                   low <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 1
-                                   return $ Just $ PVTime (fromIntegral high) (fromIntegral low)
-         PTime ETimeVal-> do high <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
-                             return $ Just $ PVTime (fromIntegral high) 0
-         -- TODO(lally): Add decode support for these counters.
-         PCounter (Just n) -> do val <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
-                                 return $ Just $ PVCounter val n (PIntelCounter "" "" "")
-         PCounter Nothing -> return $ Just $ PVCounter 0 0 PCNone
-         PByte -> do val <- peekElemOff (castPtr ptrAdded :: Ptr Word8) 0
-                     return $ Just $ PVIntegral (fromIntegral val) -}
+      primValue <- MaybeT $ liftM Just $ readValue (fmType elem) rconf vec (lIxOf lmem)
       let thisResult = FEValue <$> (pure primValue) <*> (findMember (frMemName lmem) layout) <*> pure lmem
       rest <- readMember lmems rconf layout v
       --MaybeT $ do putStrLn $ "Got member: " ++ show primValue ++ " for found member " ++ (

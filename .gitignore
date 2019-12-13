@@ -6,4 +6,6 @@ save.*
 .ppt/
 *.lock
 *_flymake.hs
+int-test/ppt-Minimal.*
+int-test/*.o
 
