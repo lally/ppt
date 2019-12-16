@@ -1,9 +1,10 @@
 #!/usr/bin/python3
 
-import subprocess
 import os
+import tempfile
 from time import sleep
-
+from subprocess import call, Popen
+from signal import SIGKILL
 # Plan:
 # - Generate the local spec into each language.
 # - Build each language's output (I can use a local Makefile to hold those details)
@@ -28,21 +29,48 @@ from time import sleep
 #    int d,e,f;
 # }
 
+class InTempDir:
+  def __enter__(self):
+    self.dir = tempfile.mkdtemp()
+    self.passing = True
+    print(f"Temp dir is {self.dir}")
+    return self
+  def __exit__(self, type, value, traceback):
+    if self.passing:
+      os.rmdir(self.dir)
+
 
 def buildCpp():
-  subprocess.call(["make", "cpptest"])
+  call(["make", "cpptest"])
 
-def runCppExperiment():
-  with NamedTemporaryFile as tmpfile
-    with Popen(["cpptest"]) as instrumented:
-      sleep(1)
-      ppt = Popen(["stack", "exec", "ppt", "attach", "-p", str(instrumented.pid), "-b", "Minimal", "-o", tmpfile.name])
-      sleep(5)
-      ppt.send_signal(SIGINT)
-      instrumented.kill()
-      # Note: this probably requires a flag to stack to indicate where
-      # the project is, and a prior cd() to the temp dir to convert it.
-      subprocess.call(["stack", "exec", "ppt", "retrieve", tmpfile.name])
+def runCppExperiment(extraFlags=[]):
+  with InTempDir() as tmpdir:
+    call(["rm", "-f", "./last"])
+    call(["ln", "-s", tmpdir.dir, "./last"])
+    with tempfile.NamedTemporaryFile(dir=tmpdir.dir, delete=False) as tmpfile:
+      print("Running cpptest")
+      with Popen(["./cpptest"]) as instrumented:
+        print("  sleeping 1 sec")
+        sleep(1)
+        attach_args = ["stack", "exec", "ppt", "--", "attach", "-p", str(instrumented.pid),
+                     "-b", "Minimal", "-o", tmpfile.name] + extraFlags
+        print(f"Attaching via ppt with filename {tmpfile.name}: " + ' '.join(attach_args))
+        ppt = Popen(attach_args)
+        print(f"  pid is {ppt.pid}, sleeping 5 sec")
+        sleep(5)
+        print( "  killing ppt")
+        ppt.kill()
+        print( "  killing cpptest")
+        instrumented.kill()
+        # Note: this probably requires a flag to stack to indicate where
+        # the project is, and a prior cd() to the temp dir to convert it.
+#        root = os.path.abspath('../')
+        decode_args = ["stack", "exec", "--cwd", tmpdir.dir, "ppt", "decode", tmpfile.name]
+        print( "Decoding via " + ' '.join(decode_args))
+        call(decode_args)
+        tmpdir.passing = False
 
-buildCpp()
-runCppExperiment()
+if __name__ == '__main__':
+  buildCpp()
+  runCppExperiment(["-c", "LLC_MISSES,INSTRUCTIONS_RETIRED,UNHALTED_CORE_CYCLES"])
+  runCppExperiment()

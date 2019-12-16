@@ -13,6 +13,7 @@ import Control.Lens
 import Text.PrettyPrint ((<>),(<+>))
 import Data.Aeson (encode)
 import Data.ByteString.Lazy.Char8 (unpack)
+import Data.Maybe (fromJust)
 
 import System.FilePath
 import qualified Data.Set as S
@@ -73,7 +74,7 @@ dataDecl cfg first mods =
       hasCounters _ = False
       enableCounters :: Bool
       enableCounters = any hasCounters mods
-      enableNativeCounters = enableCounters && (nativeCounters cfg)
+      enableNativeCounters = enableCounters && nativeCounters cfg
       nrCounters = show $ counterCount cfg
       counterMem = if enableCounters
                    then  ([("static int", "ppt_counter_fd[" ++ nrCounters ++ "]")] ++
@@ -125,40 +126,39 @@ writeDecl cfg firstName (ClassDecl name typeIdx clsMems clsMeths _ _) =
   let tag = PP.text $ "class " ++ name
       publicTail [] = [docPublic]
       publicTail s =
-        case (last s) of
+        case last s of
           PubMember _ -> []
           PrivMember _ -> [docPublic]
       memBody = qualBlock cfg clsMems
       chosenSaveFn = if firstName == name
                      then saveFn firstName cfg typeIdx
-                     else restSaveFn firstName cfg
+                     else restSaveFn firstName cfg typeIdx
 
       withMeths meths = (publicTail clsMems) ++ (indentify cfg ((chosenSaveFn):clsMeths))
-  in PP.vcat ((tag <+> PP.lbrace):( memBody ++ (withMeths clsMeths)) ++ [
-    PP.rbrace <> PP.semi])
+  in PP.vcat ((tag <+> PP.lbrace):( memBody ++ withMeths clsMeths) ++ [
+    PP.rbrace <> PP.semi] ++ [PP.empty])
 
-restSaveFn :: String -> OutputCfg -> PP.Doc
-restSaveFn firstName cfg =
+restSaveFn :: String -> OutputCfg -> Maybe Int -> PP.Doc
+restSaveFn firstName cfg typeIdx =
   blockdecl cfg (docConcat ["void save()"]) PP.empty [
-    stmt $ "reinterpret_cast<" ++ firstName ++ "*>(this)->save()"
+    stmt ("reinterpret_cast<" ++ firstName ++ "*>(this)->save(" ++ show (fromJust typeIdx) ++ ")")
   ]
 
 saveFn :: String -> OutputCfg -> Maybe Int -> PP.Doc
 saveFn firstName cfg typeIdx =
-  let bufp = "data_" ++ (bufName cfg) ++ "::ppt_buf"
-      bufsz = "data_" ++ (bufName cfg) ++ "::ppt_bufsz"
-      offset = "data_" ++ (bufName cfg) ++ "::ppt_offset"
-  in blockdecl cfg (docConcat ["void save()"])  PP.empty [
-       blockdecl cfg (docConcat [ "if (!", bufp, " && !_ppt_hmem_", bufName cfg, ")" ]) PP.semi [
+  let bufp = "data_" ++ bname ++ "::ppt_buf"
+      bufsz = "data_" ++ bname ++ "::ppt_bufsz"
+      offset = "data_" ++ bname ++ "::ppt_offset"
+      bname = bufName cfg
+      writeBarrier = PP.text "std::atomic_thread_fence(std::memory_order_release)"
+      hasType = isn't  _Nothing typeIdx
+  in blockdecl cfg (docConcat (["void save("] ++ ["int type=1" | hasType] ++ [")"]))  PP.empty [
+       blockdecl cfg (docConcat [ "if (!", bufp, " && !_ppt_hmem_", bname, ")" ]) PP.semi [
            PP.text "return"],
-       blockdecl cfg (docConcat [ "if (try_attach())"]) PP.semi $ concat [
-           [ "int index = nextIndex()",
-             "__ppt_seqno = index",
-             "__ppt_seqno_back = index" ] ++
-           (case typeIdx of
-              Nothing -> []
-              Just idx -> [PP.text $ "__ppt_type = " ++ show idx]) ++
-           [ PP.text $ "const int modidx = (" ++ offset ++ " + index-1) % " ++ bufsz],
+       blockdecl cfg (docConcat [ "if ((", bufp, " && _ppt_hmem_", bname, ") || try_attach())"]) PP.semi $ concat [
+           [ PP.text  "int index = nextIndex()" ],
+           [ PP.text "__ppt_type = type" | hasType ],
+           [ PP.text ( "const int modidx = (" ++ offset ++ " + index-1) % " ++ bufsz)],
            (if multithreadWrite cfg
             then [PP.text $ bufp ++ "[modidx].__ppt_seqno = 0",
                   PP.text $ bufp ++ "[modidx].__ppt_seqno_back = 0",
@@ -171,12 +171,10 @@ saveFn firstName cfg typeIdx =
                          "sizeof(*this) - 2*sizeof(__ppt_seqno))"],
              writeBarrier,
              PP.text $ bufp ++ "[modidx].__ppt_seqno_back = index",
-             writeBarrier
-           ]
-       ],
+             writeBarrier ]
+           ],
        PP.empty
     ]
-  where writeBarrier = PP.text "std::atomic_thread_fence(std::memory_order_release)"
 
 modDecls :: OutputCfg -> String -> [GenModule] -> PP.Doc
 modDecls cfg firstName mods =
@@ -199,12 +197,13 @@ modInlineDefs cfg firstName mods = PP.empty
 
 attachFn :: String -> OutputCfg -> Bool -> PP.Doc
 attachFn firstName cfg hasCounters =
-  let bufp = "data_" ++ (bufName cfg) ++ "::ppt_buf"
-      bufsz = "data_" ++ (bufName cfg) ++ "::ppt_bufsz"
-      offset = "data_" ++ (bufName cfg) ++ "::ppt_offset"
+  let bufp = "data_" ++ buf ++ "::ppt_buf"
+      bufsz = "data_" ++ buf ++ "::ppt_bufsz"
+      offset = "data_" ++ buf ++ "::ppt_offset"
+      buf = bufName cfg
   in PP.vcat $ (if hasCounters then [stmt "void setupCounters()", stmt "void closeCounters()"] else []) ++ [
     blockdecl cfg (PP.text "bool try_attach()") PP.empty [
-        blockdecl cfg (docConcat ["if (",bufp," && ", "_ppt_hmem_", bufName cfg, ")"]) PP.semi [
+        blockdecl cfg (docConcat ["if (",bufp," && ", "_ppt_hmem_", buf, ")"]) PP.semi [
             PP.text "return true"
             ],
         blockdecl cfg (docConcat ["if (_ppt_hmem_",buf," && !",bufp,")"]) PP.empty ([
@@ -233,25 +232,20 @@ attachFn firstName cfg hasCounters =
             docConcat [offset, " = ", bufsz, " - ((s_index.load()-1) % ", bufsz, ")"] <> PP.semi,
             docConcat ["_ppt_ctrl->data_block_hmem_attached = _ppt_hmem_",
                        buf ] <> PP.semi]
-            ++ (if hasCounters
-                then [stmt "setupCounters()"]
-                else []) ++
+            ++ [stmt "setupCounters()" | hasCounters] ++
             [stmt "return true"]),
         blockdecl cfg (docConcat ["else if (",bufp," && !_ppt_hmem_",buf,")"]) PP.empty (
-            (if hasCounters
-              then [stmt "closeCounters()"]
-              else []) ++ [
-                blockdecl cfg (PP.text $ "if (shmdt(_ppt_ctrl) != 0)") PP.semi [
+            [stmt "closeCounters()" | hasCounters]  ++ [
+                blockdecl cfg (PP.text "if (shmdt(_ppt_ctrl) != 0)") PP.semi [
                     docConcat ["perror(\"failed ppt detach of ",buf,": shmdt\")"]
                     ],
                 stmt $ bufp ++ " = nullptr",
-                stmt $ "_ppt_ctrl = nullptr",
+                stmt "_ppt_ctrl = nullptr",
                 docConcat ["_ppt_hmem_", buf, " = 0"] <> PP.semi,
                 stmt "return false"]),
         stmt "return false"
         ]
     ]
-    where buf = bufName cfg
 
 nextIdxFn :: String -> OutputCfg -> PP.Doc
 nextIdxFn firstName cfg =

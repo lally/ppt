@@ -147,13 +147,13 @@ makeMember cfg mem
       PRational ty _ -> let declType = case ty of
                                          PPDouble -> "double"
                                          PPFloat -> "float"
-                            memSfx = if defaultInit cfg then "= 0" else ""
+                            memSfx = if defaultInit cfg then " = 0" else ""
                         in MB [] (dataMember declType (nm ++ memSfx)) [] []
 
       PIntegral ty _ -> let declType = case ty of
-                                         PPByte -> "int32_t"
-                                         PPInt -> "uint8_t"
-                            memSfx = if defaultInit cfg then "= 0" else ""
+                                         PPByte -> "uint8_t"
+                                         PPInt -> "int32_t"
+                            memSfx = if defaultInit cfg then " = 0" else ""
                         in MB [] (dataMember declType (nm ++ memSfx)) [] []
 
 -- These should have been layed out by now!

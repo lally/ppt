@@ -62,7 +62,7 @@ int main(int args, char ** argv) {
        record.snapshot_events_start();
        usleep(10);
        record.a = last_a + acount;
-       record.b = record.a + bcount;
+       record.b = 0x4c;
        record.c = record.b + ccount;
        last_a = record.a;
        for (int a = 0; a < acount; a++)
@@ -80,7 +80,7 @@ int main(int args, char ** argv) {
 
        record.d = last_d + (rand() % 25);
        record.e = record.d + (rand() % 25);
-       record.f = record.e + (rand() % 25);
+       record.f = 0x30303720u;
        last_d = record.d;
 
        // reusing do_[abc]_work().
@@ -94,7 +94,7 @@ int main(int args, char ** argv) {
        record.snapshot_foos_end();
        record.save();
      }
-     usleep(delay * 1000);
+     usleep(1000);
    }
    return 0;
 }

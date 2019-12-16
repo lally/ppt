@@ -160,14 +160,14 @@ decodeFromBuffer rinfo vec startOffset sz layouts =
      let layout = layouts !! frameType
      -- TODO: Go applicative on list constructor for members
      members <- readMember (layout ^. flLayout) rinfo layout (vec, rinfo, startOffset)
-     mlog $ "Got frame";
+     -- mlog $ "Got frame";
      return (FValue (layout ^. flFrame) members)
 
 
 -- TODO: Make this a lazy bytestring input, then use fromChunks to get
 -- out strict ByteStrings, and combine the chunks (copying only the
 -- bytes needed! as we cross boundaries.
-decodeFromBytes :: ReadConfig -> JsonRep -> BSL.ByteString -> IO ([FrameValue])
+decodeFromBytes :: ReadConfig -> JsonRep -> BSL.ByteString -> IO [FrameValue]
 decodeFromBytes rinfo json bytes = do
   case frameSize json of
     Nothing -> return []
@@ -176,12 +176,9 @@ decodeFromBytes rinfo json bytes = do
           vec :: V.Vector Word8
           vec = V.fromList $ BSL.unpack bytes
           bslen = BSL.length bytes
---      putStrLn $ "Frame size is " ++ show frsize ++ " bytes long,  Expecting " ++ show (
---        bslen `div` (fromIntegral frsize)) ++ " frames."
---      putStrLn $ "started with ByteString of length " ++ (show bslen)
-      let numRecords = fromIntegral (BSL.length bytes `div` (fromIntegral frsize))
+      let numRecords = fromIntegral (BSL.length bytes `div` fromIntegral frsize)
       res <- mapM (\idx -> runMaybeT $ decodeFromBuffer rinfo vec (idx * frsize) frsize frameLayouts) [0..numRecords]
-      putStrLn $ " decoded " ++ show (length res) ++ " records:\n\t" ++ (L.intercalate "\n\t" $ map show res)
+--      putStrLn $ " decoded " ++ show (length res) ++ " records:\n\t" ++ (L.intercalate "\n\t" $ map show res)
       return $ catMaybes res
 
 deserialiseHeader :: DBG.Get (Maybe Word32)
@@ -205,8 +202,7 @@ splitFileContents contents =
 
 decodeFile :: BSL.ByteString -> IO ([FrameValue])
 decodeFile contents = do
-  let length = DBG.runGet deserialiseHeader contents
-      header = splitFileContents contents
+  let header = splitFileContents contents
   case header of
     Nothing -> do putStrLn "Invalid file format"
                   return []
@@ -215,10 +211,19 @@ decodeFile contents = do
       -- (1) the 8 byte header we just read
       -- (2) the json blob
       -- (3) the binary frames
-      putStrLn $ "Got remaining " ++ (show $ BSL.length binaryFrames) ++ " for file after header."
-      putStrLn $ "That should be " ++ (show $ ((fromIntegral $ BSL.length binaryFrames) / 4.0)) ++ " Ints."
-      let rinfo = ReadConfig (jsTarget $ frJson fileRecord) undefined undefined
-      decodeFromBytes rinfo (frJson fileRecord) binaryFrames
+      let length = DBG.runGet deserialiseHeader contents
+          counterNames = frCounters fileRecord
+          infCounterNames = counterNames ++ repeat ""
+          counters = if null counterNames
+                     then PPCNone
+                     else PPIntelCounter (infCounterNames !! 0) (infCounterNames !! 1) (infCounterNames !! 2)
+          json = frJson fileRecord
+          layoutSpecs = map (\f -> let (LayoutIO ss _) = layoutSpec f in ss) (jsBufferFrames json)
+      putStrLn $ "Frame record sizes are (and should all be equal): " ++ L.intercalate ", " (map show layoutSpecs)
+      putStrLn $ "Got remaining " ++ show (BSL.length binaryFrames) ++ " for file after header."
+      putStrLn $ "That should be " ++ show ((fromIntegral (BSL.length binaryFrames)) / fromIntegral (head layoutSpecs)) ++ " Frames."
+      let rinfo = ReadConfig (jsTarget json) (jsBufferEmit json ^. eTimeRep) counters
+      decodeFromBytes rinfo json binaryFrames
 
 decodeFileToConsole :: String -> Int -> IO ()
 decodeFileToConsole filename maxNr = do
@@ -255,22 +260,17 @@ showValue (PTime (Just (ETimeSpec _, a, b))) = show $ a * 1000000000 + b
 showValue (PTime (Just (ETimeVal, a, b))) = show $ a * 1000000 + b
 showValue (PRational _ (Just d)) = show d
 showValue (PIntegral _ (Just i)) = show i
-{-
-showValue (PCounter v 0 (PPIntelCounter name _ _)) = name ++ ": " ++ show v
-showValue (PCounter v 1 (PPIntelCounter _ name _)) = name ++ ": " ++ show v
-showValue (PCounter v 2 (PPIntelCounter _ _ name)) = name ++ ": " ++ show v -}
+--showValue (PCounter v 0 (PPIntelCounter name _ _)) = name ++ ": " ++ show v
+--showValue (PCounter v 1 (PPIntelCounter _ name _)) = name ++ ": " ++ show v
+--showValue (PCounter v 2 (PPIntelCounter _ _ name)) = name ++ ": " ++ show v
 showValue (PCounter (Just (PPCNone, _))) = "0"
 
 -- |Currently does no processing. Opens 'filename' and writes out CSVs
 -- - one per found frame type - to 'destDir'.
-decodeFileToCSVs filename destDir = undefined {-do
+decodeFileToCSVs filename destDir = do
   let writeCsv dir (DFrame fr lmem rows) = do
         let fileName = _frameName fr ++ ".csv"
             firstRow = head rows
-            nameOf :: LayoutMember -> String
-            nameOf lm =
-              if lm ^. lKind . is _lMember
-              then lm ^. lKind . _LMember .
             nameOf lm = lm ^. lName
             headers = "ppt_seqno, " ++  L.intercalate ", " (map nameOf $ lmem ^.. folded)
             saveRow (DRow _ n vs) = L.intercalate ", " $ show n:map showValue vs
@@ -281,11 +281,11 @@ decodeFileToCSVs filename destDir = undefined {-do
   -- This will fail quickly if we can't create the directory.
   createDirectory destDir
   contents <- BSL.readFile filename
-  values <- decodeFile {-x64-} contents
+  values <- decodeFile contents
 --  let csvs = F.foldl' (\hm fv -> HM.insertWith (++) (_frameName $ _frame fv) [fv] hm) HM.empty values
   let csvs = sortValues values
   mapM_ (writeCsv destDir) csvs
-  return $ map (_frameName . _dFrame) csvs -}
+  return $ map (_frameName . _dFrame) csvs
 
 decodeCommand :: [String] -> IO ()
 decodeCommand [] = do

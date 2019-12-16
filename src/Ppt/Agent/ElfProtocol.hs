@@ -5,6 +5,7 @@ module Ppt.Agent.ElfProtocol where
 import Control.Concurrent
 import Control.Exception (handle, displayException)
 import Control.Exception.Base
+import Control.Monad (when)
 import Data.Aeson
 import Data.Bits
 import Data.Char
@@ -265,7 +266,7 @@ findCounter pmu event = do
       pmuLen = length pmuPfx
       eventPfx = take pmuLen event
       hasPrefix = strstr "::" event
-  if hasPrefix &&  False == (strstr pmuPfx event)
+  if hasPrefix && not (strstr pmuPfx event)
   then return False
   else do
     counterName <- FCS.newCString (pmu ++ "::" ++ event)
@@ -321,11 +322,12 @@ setCounters ns shmAddr verbosity = do -- setCounters' ns p 0
 
 attachAndRun :: Int -> String -> (Int -> IntPtr -> JsonRep -> Int -> [String] -> IO ()) -> Int ->  [String] -> IO ()
 attachAndRun pid bufferName runFn verbosity cntrs = do
-  let verbStrLn s = if verbosity > 0 then putStrLn s else return ()
+  let verbStrLn s = when (verbosity > 0) $ putStrLn s
       nrCntrs = fromIntegral $ length cntrs
   process <- loadProcess pid
   ldcntrs <- if length cntrs > 0
     then do putStrLn "Initializing libpfm"
+            putStrLn "If you get permissions errors: echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid"
             initCounters
     else return True
   let ctrlStructSz = [C.pure| int{ sizeof(struct ppt_control) +
@@ -339,9 +341,9 @@ attachAndRun pid bufferName runFn verbosity cntrs = do
       hmem_sym = head hmemSyms
   checkErrors [
     check "Initializing libpfm" ldcntrs,
-    check (concat ["Could not find ", stat_pfx, bufferName]) $ (length statSyms == 1),
-    check (concat ["Could not find ", json_pfx, bufferName]) $ (length jsonSyms == 1),
-    check (concat ["Could not find ", hmem_pfx, bufferName]) $ (length hmemSyms == 1)
+    check (concat ["Could not find ", stat_pfx, bufferName]) (length statSyms == 1),
+    check (concat ["Could not find ", json_pfx, bufferName]) (length jsonSyms == 1),
+    check (concat ["Could not find ", hmem_pfx, bufferName]) (length hmemSyms == 1)
     ]
   ourPid <- POS.getProcessID
   moldPid <- swapIntegerInProcess pid statSym 0 (fromIntegral ourPid)
