@@ -9,3 +9,8 @@ save.*
 int-test/ppt-Minimal.*
 int-test/*.o
 
+int-test/cpptest
+*.ppt
+deps.dot*
+.*.swp
+.projectile

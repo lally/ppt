@@ -14,7 +14,7 @@ x64Layout = TargetInfo 8 4 4 16 8 4 3
 data OutputCfg = OutputCfg { timeType :: String -- ^Decltype of time vars
                            , timeHeader :: String
                              -- ^Which header to include for time support
-                           , timeSave :: (String -> PP.Doc) -- ^Save time to a var
+                           , timeSave :: String -> PP.Doc -- ^Save time to a var
                            , indent :: Int -- ^Indentation depth
                            , defaultInit :: Bool
                              -- ^Does the constructor zero out the type?

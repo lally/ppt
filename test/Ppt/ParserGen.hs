@@ -46,7 +46,7 @@ instance Random Prim where
         intify (PIntegral PPInt _) = 2
         intify (PIntegral PPByte _) = 5
         intify (PTime _) = 3
-        intify (PCounter _) = 4
+        intify (PCounter _ _) = 4
         primify :: (RandomGen g) => Int -> g -> (Prim, g)
         primify 0 = (\g -> let (rv, g') = next g in (PRational PPDouble (Just $ fromIntegral rv), g'))
         primify 1 = (\g -> let (rv, g') = next g in (PRational PPFloat (Just $ fromIntegral rv), g'))
@@ -54,7 +54,7 @@ instance Random Prim where
         primify 3 = (\g -> let (tr, g')= random g -- :: RandomGen a => (ETimeRep, a)
                                (rv, g'') = next g'
                             in (PTime (Just (tr, rv, rv)), g''))
-        primify 4 = (\g -> (PCounter (Just (PPCNone, [])), g))
+        primify 4 = (\g -> (PCounter (Just 0) (Just (PPCNone, 0)), g))
         primify 5 = (\g -> let (rv, g') = random g in (PIntegral PPByte (Just rv), g'))
         start_v = intify s
         end_v = intify e

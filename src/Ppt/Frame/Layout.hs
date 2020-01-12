@@ -49,7 +49,7 @@ sizeOf info p =
     PIntegral PPInt _ -> tInt info
     PIntegral PPByte _ -> 1
     PTime _ -> tTime info
-    PCounter _ -> tCounter info
+    PCounter _ _-> tCounter info
 
 alignOf :: TargetInfo -> Prim -> Int
 alignOf info p =
@@ -59,7 +59,7 @@ alignOf info p =
     PIntegral PPInt _ -> tInt info
     PIntegral PPByte _ -> 1
     PTime _ -> tTime info
-    PCounter _ -> tCounter info
+    PCounter _ _-> tCounter info
 
 -- |Indicates the amount of space in the last 'align'-sized block that 'amt' takes.
 alignRemainder :: Int -> Int -> Int

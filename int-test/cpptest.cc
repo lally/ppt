@@ -42,7 +42,7 @@ static void do_c_work() {
 
 int main(int args, char ** argv) {
    pid_t pid = getpid();
-   int delay = 50;
+   int delay = 10;
    if (args > 1) {
       delay = atoi(argv[1]);
    }
@@ -55,8 +55,13 @@ int main(int args, char ** argv) {
    const int dcount = rand() % 50;
    const int ecount = rand() % 50;
    const int fcount = rand() % 50;
+   int loopCounter = 0;
+   int firstCount = 0;
+   int secondCount = 0;
    while (1) {
+     loopCounter++;
      if (rand() % 2 == 0) {
+       firstCount++;
        ppt::Minimal::first record;
        record.snapshot_duration_start();
        record.snapshot_events_start();
@@ -75,6 +80,7 @@ int main(int args, char ** argv) {
        record.snapshot_duration_end();
        record.save();
      } else {
+       secondCount++;
        ppt::Minimal::second record;
        record.snapshot_foos_start();
 
@@ -94,7 +100,9 @@ int main(int args, char ** argv) {
        record.snapshot_foos_end();
        record.save();
      }
-     usleep(1000);
+     if (false) // 0 == (loopCounter % 1000))
+       printf("Firsts: %8d, Seconds: %8d, Iters: %d\n", firstCount, secondCount, loopCounter);
+     usleep(delay);
    }
    return 0;
 }

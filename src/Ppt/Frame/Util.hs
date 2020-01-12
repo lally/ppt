@@ -1,4 +1,4 @@
-module Ppt.Frame.Util (showLayoutData, showLayout) where
+module Ppt.Frame.Util (showLayoutData, showLayout, showFrameLayouts) where
 import Ppt.Frame.Layout
 import Ppt.Frame.Types
 import Ppt.Frame.LayoutAlgo
@@ -7,6 +7,7 @@ import Ppt.Frame.Parser
 import Ppt.Generate.CpConfig
 import Ppt.Generate.CpPrim
 import Ppt.Generate.Cp
+import Ppt.Generate.CpConfig (x64Layout)
 import Control.Lens hiding (bimap)
 import Data.Bits (shiftR, (.&.))
 import Foreign.C.Types
@@ -15,9 +16,7 @@ import qualified Data.List as L
 import qualified Data.ByteString as BS
 import qualified Text.PrettyPrint as PP
 
--- TODO(lally): Use inline-c and sizeof-ops to get this data.  Find a
--- place for this.
-x64    = TargetInfo 8 4 4 8 8 1 3
+x64    = x64Layout
 
 opts :: EmitOptions
 opts = EmitOptions
@@ -70,24 +69,25 @@ mkInt n = FMemberElem $ FMember (PIntegral PPInt Nothing) n False
 mkTime n = FMemberElem $ FMember (PTime (Just (ETimeSpec ETimeClockRealtime, 0, 0))) n True
 
 lshow :: LayoutMember -> String
-lshow (LMember ty off algn sz knd nm) = printf "%-20s off=%3d algn=%3d sz=%2d name=%-25s kind=%s" (show ty) off algn sz nm (show knd)
+lshow (LMember ty off algn sz knd nm) =
+  printf "%-30s off=%3d algn=%3d sz=%2d name=%-25s kind=%s" (show ty) off algn sz nm (show knd)
 
 evalLayout :: LayoutMember -> String
 evalLayout lmem =
-  let alignCheck m =
-        let sz = sizeOf x64 $ m ^. lType in
-          (if m ^.lKind == LKPadding (m ^. lSize) || (m ^. lSize == sz)
-           then (if (m ^. lOffset) `mod` (m ^. lAlignment) == 0
-                  then 0
-                  else 2)
-           else 1)
-      prefix = let result = alignCheck lmem in (if result == 0
-                                                then " > good   "
-                                                else  " > BAD(" ++ show result ++ ") ")
+  let alignCheck :: Int
+      alignCheck = let sz = sizeOf x64 $ lmem ^. lType
+                   in if lmem ^.lKind == LKPadding (lmem ^. lSize) || (lmem ^. lSize == sz)
+                      then if (lmem ^. lOffset) `mod` (lmem ^. lAlignment) == 0
+                           then 0
+                           else 2
+                      else 1
+      prefix = if alignCheck == 0
+               then " > good   "
+               else  " > BAD(" ++ show alignCheck ++ ") "
   in prefix ++ lshow lmem
 
 layoutData :: String -> [LayoutMember] -> IO ()
-layoutData n elems = do
+layoutData frname elems = do
       let paddingSz' (LKPadding n) = n
           paddingSz' _ = 0
           paddingSz mem = paddingSz' $ mem ^. lKind
@@ -95,9 +95,13 @@ layoutData n elems = do
             | n == 0 = "   "
             | otherwise = printf "%03d" n
           showPad _ = showPad (LKPadding 0)
-      putStrLn $ " -- " ++ n ++ " -- "
+          lastOf e = e ^. lSize + e ^. lOffset
+          totalPadding = sum $ map paddingSz elems
+          maxAlign = maximum $  elems ^..folded.lSize
+      putStrLn $ " -- " ++ frname ++ " -- "
       putStrLn $ L.intercalate "\n" $ map (\s -> showPad (s ^. lKind) ++ evalLayout s) elems
-      putStrLn $ " Padding sum: " ++ show (sum $ map paddingSz elems) ++ ", alignment: " ++ show (maximum $  elems ^..folded.lSize)
+      putStrLn $ " Padding sum: " ++ show totalPadding ++ ", alignment: " ++ show maxAlign
+      putStrLn $ "** Size: " ++ show (lastOf $ last elems)
 
 showLayout :: [Frame] -> IO ()
 showLayout frames = do

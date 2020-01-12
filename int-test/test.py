@@ -53,24 +53,26 @@ def runCppExperiment(extraFlags=[]):
         print("  sleeping 1 sec")
         sleep(1)
         attach_args = ["stack", "exec", "ppt", "--", "attach", "-p", str(instrumented.pid),
-                     "-b", "Minimal", "-o", tmpfile.name] + extraFlags
+                     "-b", "Minimal", "-v", "-o", tmpfile.name] + extraFlags
         print(f"Attaching via ppt with filename {tmpfile.name}: " + ' '.join(attach_args))
         ppt = Popen(attach_args)
         print(f"  pid is {ppt.pid}, sleeping 5 sec")
         sleep(5)
         print( "  killing ppt")
-        ppt.kill()
+        ppt.terminate()
         print( "  killing cpptest")
         instrumented.kill()
         # Note: this probably requires a flag to stack to indicate where
         # the project is, and a prior cd() to the temp dir to convert it.
-#        root = os.path.abspath('../')
         decode_args = ["stack", "exec", "--cwd", tmpdir.dir, "ppt", "decode", tmpfile.name]
-        print( "Decoding via " + ' '.join(decode_args))
-        call(decode_args)
+        if True:
+           print( "Decoding via " + ' '.join(decode_args))
+           call(decode_args)
+        else:
+            print(" Skipping decode.")
         tmpdir.passing = False
 
 if __name__ == '__main__':
   buildCpp()
   runCppExperiment(["-c", "LLC_MISSES,INSTRUCTIONS_RETIRED,UNHALTED_CORE_CYCLES"])
-  runCppExperiment()
+  # runCppExperiment()

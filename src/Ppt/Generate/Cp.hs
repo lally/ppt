@@ -184,7 +184,7 @@ modDecls cfg firstName mods =
                                     externDecl "int" ["_ppt_hmem", bufName cfg],
                                     dataDecl cfg firstName mods,
                                     PP.text "bool try_attach();",
-                                    docConcat ["class ", firstName, ";"],
+                                    -- docConcat ["class ", firstName, ";"],
                                     docConcatSp ["int", "nextIndex();"],
                                     PP.text ""]
                       GMCounters ->
@@ -216,6 +216,10 @@ attachFn firstName cfg hasCounters =
                 ],
             docConcat ["off_t elem_offset = sizeof(ppt_control) + (sizeof(ppt_control) % sizeof(",
                        firstName, "));"],
+            (if debugOutput cfg
+             then docConcat ["printf(\"offset(=%d) = sizeof(ppt_control)(=%d) + (sizeof(ppt_control)(=%d) %% sizeof(", firstName, ")(=%d)))\\n\", elem_offset, sizeof(ppt_control), sizeof(ppt_control), sizeof(", firstName, "));"]
+             else docConcat []
+            ),
             docConcat ["_ppt_ctrl = reinterpret_cast<ppt_control*>(shmat(_ppt_hmem_",
                        buf,", nullptr, 0))"] <> PP.semi,
             blockdecl cfg (PP.text "if (_ppt_ctrl == nullptr)") PP.semi [
@@ -263,23 +267,22 @@ moduleSource firstName cfg hasCounters (GMSaveBuffer (LayoutIO sz off) mt) =
         [ docConcat [ "struct ppt_stat_t { pid_t ppt_agent_pid; }"] <> PP.semi,
           externDecl "ppt_stat_t" ["_ppt_stat", bufName cfg] <> PP.semi,
           docConcat ["ppt_stat_t _ppt_stat_", bufName cfg, attrused] <> PP.semi]
+      bname = bufName cfg
       enableNativeCounters = hasCounters && (nativeCounters cfg)
       nCounters = show $ counterCount cfg
       counterMem = if hasCounters
-                   then  ([ stmt $ "int data_" ++ (bufName cfg) ++ "::ppt_counter_fd["++ nCounters ++ "]"] ++
+                   then  ([ stmt $ "int data_" ++ bname ++ "::ppt_counter_fd["++ nCounters ++ "]"] ++
                           if (nativeCounters cfg)
-                          then [stmt $ "void * data_" ++ (bufName cfg) ++ "::ppt_counter_mmap",
-                                stmt $ "uint64_t data_" ++ (bufName cfg) ++ "::ppt_counter_rcx["++ nCounters ++ "]"]
+                          then [stmt $ "void * data_" ++ bname ++ "::ppt_counter_mmap",
+                                stmt $ "uint64_t data_" ++ bname ++ "::ppt_counter_rcx["++ nCounters ++ "]"]
                           else [])
                    else []
-      debugMem = if debugOutput cfg
-                 then [stmt $ "ppt_control *get_ctrl_ptr() { return _ppt_ctrl; }"]
-                 else []
+      debugMem = [stmt "ppt_control *get_ctrl_ptr() { return _ppt_ctrl; }" | debugOutput cfg]
   in PP.vcat ([
     externDecl "const char*" ["_ppt_json", bufName cfg],
-    stmt $  firstName  ++ " * data_" ++ (bufName cfg) ++ "::ppt_buf",
-    stmt $  "int data_" ++ (bufName cfg) ++ "::ppt_bufsz",
-    stmt $  "int data_" ++ (bufName cfg) ++ "::ppt_offset"]
+    stmt $  firstName  ++ " * data_" ++ bname ++ "::ppt_buf",
+    stmt $  "int data_" ++ bname ++ "::ppt_bufsz",
+    stmt $  "int data_" ++ bname ++ "::ppt_offset"]
             ++ counterMem ++ [
     PP.hsep [docConcat ["const char* _ppt_json_", bufName cfg],
              PP.text attrused, PP.text "=", PP.text (enquote $ makeJSON cfg)] <> PP.semi,

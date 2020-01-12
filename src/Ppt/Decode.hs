@@ -12,6 +12,7 @@ import Ppt.Frame.Layout
 import Numeric (showHex)
 import Foreign.Ptr
 import Foreign.Storable
+import Data.Int (Int32)
 import Data.Maybe
 import GHC.Float
 import Data.Vector.Storable ((!), (!?))
@@ -68,8 +69,9 @@ findMember :: String -> FrameLayout -> Maybe FrameMember
 findMember name layout =
   if length mems > 0 then Just (head mems) else Nothing
   where (Frame _ elements) = layout ^. flFrame
-        memberNamed s (FMemberElem mem@(FMember _ name _)) | (s == name) = Just mem
-                                                           | otherwise = Nothing
+        memberNamed s (FMemberElem mem@(FMember _ name _))
+          | (s == name) = Just mem
+          | otherwise = Nothing
         memberNamed _ _ = Nothing
         mems = mapMaybe (memberNamed name) elements
 
@@ -103,10 +105,7 @@ readMember (lmem:lmems) rconf layout v@(vec, rinfo, startOffset) =
       --              show $ findMember (frMemName lmem) layout) ++ " for layout mem " ++ show lmem
       --            return $ Just ()
       MaybeT $ return $ (:) <$> thisResult <*> (pure rest)
-        -- TODO: implement the rest of these.  Look at what I can do in Vector to read different types.
-        -- this probably needs to move to IO (Maybe [FrameElementValue]) and use Ptr and cast to read
-        -- what I want.
-    _ -> readMember lmems rconf layout v
+    _ -> readMember lmems rconf layout v   -- Either back seqno (already checked), padding, or type desc.
 
 decodeFromBuffer :: ReadConfig -> V.Vector Word8 -> Int -> Int -> [FrameLayout] -> MaybeIO (FrameValue)
 decodeFromBuffer rinfo vec startOffset sz layouts =
@@ -114,72 +113,111 @@ decodeFromBuffer rinfo vec startOffset sz layouts =
          size = genSpec ^.lioSize
          lIxOf mem = startOffset + (mem ^. lOffset)
          firstMembers = (head layouts) ^. flLayout
---         memFrontSeq = head $ filter (\m -> m ^. lKind == (LKSeqno FrontSeq)) firstMembers
-         memFrontSeq, memBackSeq :: LayoutMember
+
          memFrontSeq = head $ firstMembers ^.. folded.filtered (\m -> m ^. lKind == (LKSeqno FrontSeq))
          memBackSeq = head $ firstMembers ^.. folded.filtered (\m -> m ^. lKind == (LKSeqno BackSeq))
-         memTypeDescs :: [LayoutMember]
-         memTypeDescs = firstMembers ^.. folded.filtered (\m -> has _LKTypeDescrim (m ^. lKind)) --filtered isTypeDesc
---           filter (\m -> isTypeDesc $ lKind m) $ view flLayout $ head layouts
---                        where isTypeDesc (LKTypeDescrim _) = True
---                              isTypeDesc _ = False
-         nrFrameTypes :: Int
+
+--         memTypeDescs :: [LayoutMember]
+         memTypeDescs = firstMembers ^.. folded.filtered (\m -> has _LKTypeDescrim (m ^. lKind))
+
          nrFrameTypes = headDef 1 (memTypeDescs ^.. folded.lKind._LKTypeDescrim)
---           case memTypeDescs of
---             [] -> 1
---             (mt:_) -> let (LKTypeDescrim sz) = mt ^, lKind in sz
+
+         showBytes :: IO ()
+         showBytes = do frameBytes <- V.unsafeWith vec (\ptr -> forM [0..sz-1] (\i -> peekByteOff ptr (startOffset + i))) :: IO [Word8]
+                        putStrLn $ show (hexList frameBytes)
          mrequire :: Show a => Bool -> a -> MaybeIO a
          mrequire True a = MaybeT $ return $ Just a
          mrequire False msg = MaybeT $ do putStrLn $ show msg
+                                          showBytes
                                           return Nothing
          mpred True _ a = MaybeT $ a
          mpred False d _ = MaybeT $ return $ Just d
-         readVecInt :: V.Vector Word8 -> Int -> MaybeIO Int
-         readVecInt vec i = MaybeT $ V.unsafeWith vec (\ptr -> do let p = castPtr ptr :: Ptr Int
-                                                                  val <- peekElemOff p i
+         readVecInt :: V.Vector Word8 -> Int -> MaybeIO Int32
+         readVecInt vec i = MaybeT $ V.unsafeWith vec (\ptr -> do let p = castPtr ptr :: Ptr Int32
+                                                                  val <- peekElemOff p (i `div` 4)
                                                                   return (Just val))
          mlog s = MaybeT $ do putStrLn s
                               return (Just s)
 
      mrequire (sz == size) "Frame sizes are equal"
-     mrequire (startOffset + sz <= V.length vec) ("Frame fits in vector", startOffset + sz, V.length vec)
+     mrequire (startOffset + sz <= V.length vec) ("Frame fits in vector (start offset + size, length of vec)", startOffset + sz, V.length vec)
      mrequire (lIxOf memFrontSeq == startOffset) "Frame seqno is first"
+     mrequire (size - (tInt (rcTargetInfo rinfo)) == memBackSeq ^. lOffset) "Back seqno is last"
 
-     startSeqno <- readVecInt vec startOffset
+     startSeqno <- readVecInt vec (lIxOf memFrontSeq)
      endSeqno <- readVecInt vec (lIxOf memBackSeq)
 
+     if startSeqno /= endSeqno
+       then MaybeT $ do putStrLn ( "* Failed synchronization.  Starting offset is " ++ (show startOffset) ++ " and bytes are:")
+                        showBytes
+                        putStrLn $ "Got start = " ++ show startSeqno ++ ", and end = " ++ show endSeqno
+                        return Nothing
+       else MaybeT $ return (Just 0)
      mrequire (startSeqno == endSeqno) ("Sequence numbers match", startSeqno, endSeqno)
 
      frameType <- if nrFrameTypes > 1
-       then do -- mlog $ "Reading " ++ (show $ head memTypeDescs) ++ " at loffset " ++ show startOffset
-               readVecInt vec (lIxOf $ head memTypeDescs)
+       then do mlog $ "Reading " ++ (show $ head memTypeDescs) ++ " at loffset " ++ show startOffset
+               MaybeT $ do showBytes
+                           return (Just 1)
+               rawFrameType <- readVecInt vec (lIxOf $ head memTypeDescs)
+               MaybeT $ return $ Just (fromIntegral rawFrameType :: Int)
        else MaybeT $ return $ Just 0
 
-     mrequire (frameType < nrFrameTypes) ("Frame type is defined", frameType, nrFrameTypes)
+     mrequire (frameType < nrFrameTypes) ("Frame type discriminator in range (frame type, nr values)", frameType, nrFrameTypes)
 
      let layout = layouts !! frameType
-     -- TODO: Go applicative on list constructor for members
      members <- readMember (layout ^. flLayout) rinfo layout (vec, rinfo, startOffset)
-     -- mlog $ "Got frame";
      return (FValue (layout ^. flFrame) members)
 
 
 -- TODO: Make this a lazy bytestring input, then use fromChunks to get
 -- out strict ByteStrings, and combine the chunks (copying only the
 -- bytes needed! as we cross boundaries.
-decodeFromBytes :: ReadConfig -> JsonRep -> BSL.ByteString -> IO [FrameValue]
-decodeFromBytes rinfo json bytes = do
+decodeFromBytes :: FileRecord  -> BSL.ByteString -> IO [FrameValue]
+decodeFromBytes frecord bytes = do
+  let rinfo = readConfig frecord
+      json = frJson frecord
   case frameSize json of
     Nothing -> return []
     Just frsize -> do
       let frameLayouts = jsBufferFrames json
           vec :: V.Vector Word8
           vec = V.fromList $ BSL.unpack bytes
-          bslen = BSL.length bytes
       let numRecords = fromIntegral (BSL.length bytes `div` fromIntegral frsize)
       res <- mapM (\idx -> runMaybeT $ decodeFromBuffer rinfo vec (idx * frsize) frsize frameLayouts) [0..numRecords]
---      putStrLn $ " decoded " ++ show (length res) ++ " records:\n\t" ++ (L.intercalate "\n\t" $ map show res)
+      let successful = catMaybes res
+      putStrLn $ " decoded " ++ show (length successful) ++ " records successfully out of "++ show (length res) ++ ":\n\t" ++ (L.intercalate "\n\t" $ map show res)
       return $ catMaybes res
+
+showBytesForFrame :: FileRecord -> BSL.ByteString -> Int -> IO ()
+showBytesForFrame frecord bytes nr = do
+  let json = frJson frecord
+  case frameSize json of
+    Nothing -> do putStrLn "Framesize is Nothing"
+    Just frsize -> do
+      let frameLayouts = jsBufferFrames json
+          rawBytes :: [Word8]
+          rawBytes = BSL.unpack $ BSL.take (fromIntegral frsize) bytes
+          vec = V.fromList rawBytes
+      putStrLn ("Bytes for frame " ++ show nr ++ ": " ++ hexList rawBytes)
+
+
+decodeOneFromBytes :: FileRecord -> BSL.ByteString -> Int -> IO (Maybe FrameValue)
+decodeOneFromBytes frecord bytes nr = do
+  let rinfo = readConfig frecord
+      json = frJson frecord
+  case frameSize json of
+    Nothing -> do putStrLn "Framesize is Nothing"
+                  return Nothing
+    Just frsize -> do
+      let frameLayouts = jsBufferFrames json
+          rawBytes :: [Word8]
+          rawBytes = BSL.unpack $ BSL.take (fromIntegral frsize) bytes
+          vec = V.fromList rawBytes
+      putStrLn ("Reading " ++ hexList rawBytes)
+      res <- runMaybeT $ decodeFromBuffer rinfo vec (nr * frsize) frsize frameLayouts
+      return res
+
 
 deserialiseHeader :: DBG.Get (Maybe Word32)
 deserialiseHeader = do
@@ -189,7 +227,11 @@ deserialiseHeader = do
     else do length <- DBG.getWord32be
             return $ Just length
 
-splitFileContents :: BSL.ByteString -> Maybe (FileRecord, BSL.ByteString)
+-- split up the string into three sections:
+-- (1) the 8 byte header we just read
+-- (2) the json blob
+-- (3) the binary frames
+splitFileContents :: BSL.ByteString -> Maybe (FileRecord, BSL.ByteString, Int)
 splitFileContents contents =
   let length = DBG.runGet deserialiseHeader contents
   in case length of
@@ -198,7 +240,17 @@ splitFileContents contents =
       let fileRecordBlob = BSL.take (fromIntegral len) $ BSL.drop 8 contents
           binaryFrames = BSL.drop ((fromIntegral len) + 8) contents
           mfileRecord = decode fileRecordBlob :: Maybe FileRecord
-      in maybe Nothing (\v -> Just (v, binaryFrames)) mfileRecord
+      in maybe Nothing (\v -> Just (v, binaryFrames, 8 + fromIntegral len)) mfileRecord
+
+readConfig :: FileRecord -> ReadConfig
+readConfig fr =
+  let counterNames = frCounters fr
+      infCounterNames = counterNames ++ repeat ""
+      counters = if null counterNames
+                 then PPCNone
+                 else PPIntelCounter (infCounterNames !! 0) (infCounterNames !! 1) (infCounterNames !! 2)
+      json = frJson fr
+  in ReadConfig (jsTarget json) (jsBufferEmit json ^. eTimeRep) counters
 
 decodeFile :: BSL.ByteString -> IO ([FrameValue])
 decodeFile contents = do
@@ -206,24 +258,15 @@ decodeFile contents = do
   case header of
     Nothing -> do putStrLn "Invalid file format"
                   return []
-    Just (fileRecord, binaryFrames) -> do
-      -- split up the string into three sections:
-      -- (1) the 8 byte header we just read
-      -- (2) the json blob
-      -- (3) the binary frames
+    Just (fileRecord, binaryFrames, headerLen) -> do
       let length = DBG.runGet deserialiseHeader contents
-          counterNames = frCounters fileRecord
-          infCounterNames = counterNames ++ repeat ""
-          counters = if null counterNames
-                     then PPCNone
-                     else PPIntelCounter (infCounterNames !! 0) (infCounterNames !! 1) (infCounterNames !! 2)
           json = frJson fileRecord
           layoutSpecs = map (\f -> let (LayoutIO ss _) = layoutSpec f in ss) (jsBufferFrames json)
       putStrLn $ "Frame record sizes are (and should all be equal): " ++ L.intercalate ", " (map show layoutSpecs)
       putStrLn $ "Got remaining " ++ show (BSL.length binaryFrames) ++ " for file after header."
       putStrLn $ "That should be " ++ show ((fromIntegral (BSL.length binaryFrames)) / fromIntegral (head layoutSpecs)) ++ " Frames."
-      let rinfo = ReadConfig (jsTarget json) (jsBufferEmit json ^. eTimeRep) counters
-      decodeFromBytes rinfo json binaryFrames
+      putStrLn $ "File header was " ++ show headerLen ++ " bytes."
+      decodeFromBytes fileRecord binaryFrames
 
 decodeFileToConsole :: String -> Int -> IO ()
 decodeFileToConsole filename maxNr = do
@@ -260,10 +303,13 @@ showValue (PTime (Just (ETimeSpec _, a, b))) = show $ a * 1000000000 + b
 showValue (PTime (Just (ETimeVal, a, b))) = show $ a * 1000000 + b
 showValue (PRational _ (Just d)) = show d
 showValue (PIntegral _ (Just i)) = show i
---showValue (PCounter v 0 (PPIntelCounter name _ _)) = name ++ ": " ++ show v
---showValue (PCounter v 1 (PPIntelCounter _ name _)) = name ++ ": " ++ show v
---showValue (PCounter v 2 (PPIntelCounter _ _ name)) = name ++ ": " ++ show v
-showValue (PCounter (Just (PPCNone, _))) = "0"
+showValue (PCounter (Just 0) (Just ((PPIntelCounter name _ _),  v))) =
+  name ++ ": " ++ show v
+showValue (PCounter (Just 1) (Just ((PPIntelCounter _ name _),  v))) =
+  name ++ ": " ++ show v
+showValue (PCounter (Just 2) (Just ((PPIntelCounter _ _ name),  v))) =
+  name ++ ": " ++ show v
+showValue (PCounter Nothing _) = "0" -- (Just (PPCNone, _))) = "0"
 
 -- |Currently does no processing. Opens 'filename' and writes out CSVs
 -- - one per found frame type - to 'destDir'.

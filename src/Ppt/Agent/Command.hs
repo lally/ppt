@@ -243,6 +243,8 @@ processBufferValues desc timeOffset fileName verbose shmPtr json bufElems cnt = 
 
   -- TODO(lally): put the TargetInfo into JsonRep instead of the FileRecord.
   file <- saveFile fileName (FileRecord "1.0.0" "now" desc (round $ timeOffset * 3600.0) cnt json)
+  position <- hGetPosn file
+  verbPutLn ("File header completes at offset " ++ show position)
   destBuffer <- VM.new (bufElems * elemSizeInWords)
   handle (flushHandler file) $ execLoop file 0 1 destBuffer
   return ()

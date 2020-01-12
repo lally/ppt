@@ -23,18 +23,11 @@ import qualified Ppt.Generate.CpConfig as CPC
 
 import System.Console.GetOpt
 
+import qualified Ppt.Frame.Util as U
+
 {-
    Command line processing support
 -}
-data Flag = OutputFile String
-          deriving (Eq, Show)
-
-data GeneratedFile = GF String PP.Doc deriving (Eq, Show)
-
--- The argument list accepted by the 'generate' command
-arglist :: [GO.OptDescr Flag]
-arglist = [GO.Option ['o'] ["output"] (GO.ReqArg OutputFile "output") 
-           "The output file(s) base name"]
 
 addList :: [String] -> [[String]] -> [[String]]
 addList [] prior = prior
@@ -115,7 +108,7 @@ generateCommand args =
       putStrLn "Options:"
       putStrLn "  --prefix FILE-PREFIX"
       putStrLn "  --tag KEY VALUE"
-      putStrLn "  --option OPITON"
+      putStrLn "  --option OPTION"
       return ()
     Just (groups, fname) -> do
       let (pfx, r1) = pullGroup "--prefix" filePfx groups
@@ -126,6 +119,7 @@ generateCommand args =
         Left err -> do
           putStrLn (L.concatMap L.concat r1)
           putStrLn (L.concatMap L.concat r2)
+          putStrLn (L.concatMap L.concat r3)
           putStrLn (L.concatMap L.concat r3)
           putStrLn err
         Right theopts -> do
@@ -140,11 +134,12 @@ generateCommand args =
               return ()
             Right (PR.Buffer emitopts frames) -> do
               let partialOpts = normalize $ concat opts
-                  layout = LA.compileFrames' CPC.x64Layout frames
-              case layout of
+              case LA.compileFrames' CPC.x64Layout frames of
                 Left s -> putStrLn ("Error in compilation: " ++ s)
                 Right layouts -> do
                   let files = CP.cppFiles emitopts layouts
-                  forM_ files (\(fname, text) -> writeFile fname (PP.render text)) 
+                  U.showFrameLayouts layouts
+                  -- forM_ layouts (\f -> putStrLn (show f))
+                  forM_ files (\(fname, text) -> writeFile fname (PP.render text))
               return ()
           return ()

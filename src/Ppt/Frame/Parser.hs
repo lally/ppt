@@ -49,7 +49,7 @@ primType o = ( resvd "double"      >> return (PRational PPDouble Nothing))
              <|> ( resvd "int"     >> return (PIntegral PPInt Nothing))
              <|> ( resvd "float"   >> return (PRational PPFloat Nothing ))
              <|> ( resvd "time"    >> return (PTime Nothing))
-             <|> ( resvd "counter" >> return (PCounter Nothing))
+             <|> ( resvd "counter" >> return (PCounter Nothing Nothing))
              <?> "type name"
 -- TODO: replace primType here with a higher-level production that
 -- also takes interval and other keywords.  They form a list of

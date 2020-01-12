@@ -3,10 +3,8 @@
 
 module Ppt.ElfProcess where
 import Data.Bits (shiftR, (.&.))
-import Data.Char (ord)
 import Foreign.C.Types
 import Control.Concurrent (runInBoundThread)
-import Numeric (showHex)
 import qualified Data.Elf as E
 import qualified Data.List as L
 import qualified System.IO as IO

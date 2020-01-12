@@ -271,14 +271,13 @@ findCounter pmu event = do
   else do
     counterName <- FCS.newCString (pmu ++ "::" ++ event)
     res <- [C.block| int { return pfm_find_event($(const char* counterName)); } |]
-    putStrLn ("[findCounter " ++ pmu ++ " " ++ event ++"] looking for " ++ pmu ++ "::" ++ event ++ ": " ++ show res)
+    --    putStrLn ("[findCounter " ++ pmu ++ " " ++ event ++"] looking for " ++ pmu ++ "::" ++ event ++ ": " ++ show res)
     return $ res >= 0
 
 -- |As a cheapie, reverse the counter names on the way in and we'll
 -- just use the length as an index var.
 setCounters :: [String] -> C.CUIntPtr -> Int -> IO (Bool)
 setCounters ns shmAddr verbosity = do -- setCounters' ns p 0
-  -- NOTE: architectural counters seem to segfault pretty regularly.  So skip them.
   pmus <- findAllPMUs
   putStrLn $ concatMap show pmus
   let candidates = [ (pmu, ctr) | (_, pmu) <- pmus, ctr <- ns ]
