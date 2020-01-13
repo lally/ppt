@@ -75,4 +75,5 @@ def runCppExperiment(extraFlags=[]):
 if __name__ == '__main__':
   buildCpp()
   runCppExperiment(["-c", "LLC_MISSES,INSTRUCTIONS_RETIRED,UNHALTED_CORE_CYCLES"])
-  # runCppExperiment()
+  runCppExperiment()
+

@@ -36,11 +36,16 @@ data ETimeRep = ETimeVal | ETimeSpec ETimeSource deriving (Generic, Eq, Show)
 data PFPPrecision = PPDouble | PPFloat deriving (Generic, Eq, Show)
 data PIPrecision = PPInt | PPByte deriving (Generic, Eq, Show)
 
+-- |Represents the expansion of some types (e.g., counters) from one to multiple members between declaration and layout.
+data ExpansionInfo = NotExpanded
+                   | Expanded Int
+                   deriving (Generic, Eq, Show)
+
 -- |Unified primitive type.  Use with 'Nothing' for a pure type value.
 data Prim = PRational PFPPrecision (Maybe Double)
           | PIntegral PIPrecision (Maybe  Int)
           | PTime           (Maybe (ETimeRep, Int, Int))
-          | PCounter        (Maybe Int) (Maybe (PCounterConfig, Word64))
+          | PCounter        ExpansionInfo (Maybe (PCounterConfig, Word64))
             -- ^index in config, config and values it's filling in.
           deriving (Generic, Eq, Show)
 
@@ -51,7 +56,7 @@ pType :: Prim -> Prim
 pType (PRational p _) = PRational p Nothing
 pType (PIntegral p _) = PIntegral p Nothing
 pType (PTime _)       = PTime Nothing
-pType (PCounter _ _)  = PCounter Nothing Nothing
+pType (PCounter _ _)  = PCounter NotExpanded Nothing
 
 -- |Indicates sizes of machine types on the runtime platform.  Also
 -- includes other layout-related values due to options.
@@ -102,12 +107,12 @@ readValue pt rconf vec off =
             do high <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
                low <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 1
                return $ PTime (Just (time, fromIntegral high, fromIntegral low))
-          PCounter (Just i) _ ->
+          PCounter (Expanded i) _ ->
             case counter of
               PPIntelCounter _ _ _ ->
-                do val <- peekElemOff (castPtr ptrAdded :: Ptr Word64) i
-                   return $ PCounter (Just i) (Just (counter, val))
-              PPCNone -> return $ PCounter (Just 0) (Just (PPCNone, 0))
+                do val <- peekElemOff (castPtr ptrAdded :: Ptr Word64) 0
+                   return $ PCounter (Expanded i) (Just (counter, val))
+              PPCNone -> return $ PCounter (Expanded 0) (Just (PPCNone, 0))
           _ -> fail ("Invalid value type: " ++ show pt)
   in V.unsafeWith vec pullPointer
 

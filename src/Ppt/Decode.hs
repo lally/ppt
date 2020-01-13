@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-} 
 module Ppt.Decode where
 
 import System.Directory
@@ -119,7 +120,6 @@ decodeFromBuffer rinfo vec startOffset sz layouts =
 
 --         memTypeDescs :: [LayoutMember]
          memTypeDescs = firstMembers ^.. folded.filtered (\m -> has _LKTypeDescrim (m ^. lKind))
-
          nrFrameTypes = headDef 1 (memTypeDescs ^.. folded.lKind._LKTypeDescrim)
 
          showBytes :: IO ()
@@ -140,15 +140,16 @@ decodeFromBuffer rinfo vec startOffset sz layouts =
                               return (Just s)
 
      mrequire (sz == size) "Frame sizes are equal"
-     mrequire (startOffset + sz <= V.length vec) ("Frame fits in vector (start offset + size, length of vec)", startOffset + sz, V.length vec)
+     mrequire (startOffset + sz <= V.length vec) ("Frame fits in vector (start offset + size, length of vec)",
+                                                  startOffset + sz, V.length vec)
      mrequire (lIxOf memFrontSeq == startOffset) "Frame seqno is first"
-     mrequire (size - (tInt (rcTargetInfo rinfo)) == memBackSeq ^. lOffset) "Back seqno is last"
+     mrequire (size - tInt (rcTargetInfo rinfo) == memBackSeq ^. lOffset) "Back seqno is last"
 
      startSeqno <- readVecInt vec (lIxOf memFrontSeq)
      endSeqno <- readVecInt vec (lIxOf memBackSeq)
 
      if startSeqno /= endSeqno
-       then MaybeT $ do putStrLn ( "* Failed synchronization.  Starting offset is " ++ (show startOffset) ++ " and bytes are:")
+       then MaybeT $ do putStrLn ( "* Failed synchronization.  Starting offset is " ++ show startOffset ++ " and bytes are:")
                         showBytes
                         putStrLn $ "Got start = " ++ show startSeqno ++ ", and end = " ++ show endSeqno
                         return Nothing
@@ -156,7 +157,7 @@ decodeFromBuffer rinfo vec startOffset sz layouts =
      mrequire (startSeqno == endSeqno) ("Sequence numbers match", startSeqno, endSeqno)
 
      frameType <- if nrFrameTypes > 1
-       then do mlog $ "Reading " ++ (show $ head memTypeDescs) ++ " at loffset " ++ show startOffset
+       then do mlog $ "Reading " ++ show (head memTypeDescs) ++ " at loffset " ++ show startOffset
                MaybeT $ do showBytes
                            return (Just 1)
                rawFrameType <- readVecInt vec (lIxOf $ head memTypeDescs)
@@ -169,6 +170,17 @@ decodeFromBuffer rinfo vec startOffset sz layouts =
      members <- readMember (layout ^. flLayout) rinfo layout (vec, rinfo, startOffset)
      return (FValue (layout ^. flFrame) members)
 
+-- |Applies collection parameters (time stamp type, performance
+-- counter names) to the member definitions.
+configureLayouts :: FileRecord -> [FrameLayout]
+configureLayouts frecord =
+  let json = frJson frecord
+      convertMember :: GenLayoutMember a -> GenLayoutMember a
+      convertMember = id
+      convertLayout :: FrameLayout -> FrameLayout
+      convertLayout layout =
+        layout { _flLayout = map convertMember (layout ^. flLayout) }
+  in map convertLayout (jsBufferFrames json)
 
 -- TODO: Make this a lazy bytestring input, then use fromChunks to get
 -- out strict ByteStrings, and combine the chunks (copying only the
@@ -180,25 +192,23 @@ decodeFromBytes frecord bytes = do
   case frameSize json of
     Nothing -> return []
     Just frsize -> do
-      let frameLayouts = jsBufferFrames json
+      let frameLayouts = configureLayouts frecord
           vec :: V.Vector Word8
           vec = V.fromList $ BSL.unpack bytes
       let numRecords = fromIntegral (BSL.length bytes `div` fromIntegral frsize)
       res <- mapM (\idx -> runMaybeT $ decodeFromBuffer rinfo vec (idx * frsize) frsize frameLayouts) [0..numRecords]
       let successful = catMaybes res
-      putStrLn $ " decoded " ++ show (length successful) ++ " records successfully out of "++ show (length res) ++ ":\n\t" ++ (L.intercalate "\n\t" $ map show res)
+      putStrLn $ " decoded " ++ show (length successful) ++ " records successfully out of "++ show (length res) ++ ":\n\t" ++ L.intercalate "\n\t" (map show res)
       return $ catMaybes res
 
 showBytesForFrame :: FileRecord -> BSL.ByteString -> Int -> IO ()
 showBytesForFrame frecord bytes nr = do
   let json = frJson frecord
   case frameSize json of
-    Nothing -> do putStrLn "Framesize is Nothing"
+    Nothing -> putStrLn "Framesize is Nothing"
     Just frsize -> do
-      let frameLayouts = jsBufferFrames json
-          rawBytes :: [Word8]
+      let rawBytes :: [Word8]
           rawBytes = BSL.unpack $ BSL.take (fromIntegral frsize) bytes
-          vec = V.fromList rawBytes
       putStrLn ("Bytes for frame " ++ show nr ++ ": " ++ hexList rawBytes)
 
 
@@ -215,8 +225,7 @@ decodeOneFromBytes frecord bytes nr = do
           rawBytes = BSL.unpack $ BSL.take (fromIntegral frsize) bytes
           vec = V.fromList rawBytes
       putStrLn ("Reading " ++ hexList rawBytes)
-      res <- runMaybeT $ decodeFromBuffer rinfo vec (nr * frsize) frsize frameLayouts
-      return res
+      runMaybeT $ decodeFromBuffer rinfo vec (nr * frsize) frsize frameLayouts
 
 
 deserialiseHeader :: DBG.Get (Maybe Word32)
@@ -224,8 +233,7 @@ deserialiseHeader = do
   prefix <- DBG.getWord32be
   if prefix /= 0x50505431
     then return Nothing
-    else do length <- DBG.getWord32be
-            return $ Just length
+    else Just <$> DBG.getWord32be
 
 -- split up the string into three sections:
 -- (1) the 8 byte header we just read
@@ -238,9 +246,9 @@ splitFileContents contents =
     Nothing -> Nothing
     Just len ->
       let fileRecordBlob = BSL.take (fromIntegral len) $ BSL.drop 8 contents
-          binaryFrames = BSL.drop ((fromIntegral len) + 8) contents
+          binaryFrames = BSL.drop (fromIntegral len + 8) contents
           mfileRecord = decode fileRecordBlob :: Maybe FileRecord
-      in maybe Nothing (\v -> Just (v, binaryFrames, 8 + fromIntegral len)) mfileRecord
+      in (\v -> Just (v, binaryFrames, 8 + fromIntegral len)) =<< mfileRecord
 
 readConfig :: FileRecord -> ReadConfig
 readConfig fr =
@@ -264,7 +272,7 @@ decodeFile contents = do
           layoutSpecs = map (\f -> let (LayoutIO ss _) = layoutSpec f in ss) (jsBufferFrames json)
       putStrLn $ "Frame record sizes are (and should all be equal): " ++ L.intercalate ", " (map show layoutSpecs)
       putStrLn $ "Got remaining " ++ show (BSL.length binaryFrames) ++ " for file after header."
-      putStrLn $ "That should be " ++ show ((fromIntegral (BSL.length binaryFrames)) / fromIntegral (head layoutSpecs)) ++ " Frames."
+      putStrLn $ "That should be " ++ show (fromIntegral (BSL.length binaryFrames) / fromIntegral (head layoutSpecs)) ++ " Frames."
       putStrLn $ "File header was " ++ show headerLen ++ " bytes."
       decodeFromBytes fileRecord binaryFrames
 
@@ -272,7 +280,7 @@ decodeFileToConsole :: String -> Int -> IO ()
 decodeFileToConsole filename maxNr = do
   contents <- BSL.readFile filename
   values <- decodeFile contents
-  putStrLn $ ">> " ++ (L.intercalate "\n>> " $ map descValue $ take maxNr values)
+  putStrLn $ ">> " ++ (L.intercalate "\n>> " $ map descValue (take maxNr values))
 
 -- Always returns the sequence number *first*.  Also assumes its first.
 decodeValue :: FrameValue -> (Int, [Prim])
@@ -294,22 +302,22 @@ sortValues inputs =
     updateForFV :: FrameValue -> HM.HashMap Frame DecodedFrame -> HM.HashMap Frame DecodedFrame
     updateForFV fv@(FValue fr vals) mp =
       let (seq, row) = decodeValue fv
-          layoutMems = mapMaybe (\c -> case c of (FEValue _ _ m) -> Just m ; (FESeqno _) -> Nothing) vals
+          layoutMems = mapMaybe (\case (FEValue _ _ m) -> Just m ; (FESeqno _) -> Nothing) vals
       in HM.insertWith mergeEntry fr (makeEntry fr layoutMems seq row) mp
 
 -- |Show a raw value given a time representation config.
 showValue :: Prim -> String
 showValue (PTime (Just (ETimeSpec _, a, b))) = show $ a * 1000000000 + b
 showValue (PTime (Just (ETimeVal, a, b))) = show $ a * 1000000 + b
+-- these two should probably truncate
 showValue (PRational _ (Just d)) = show d
 showValue (PIntegral _ (Just i)) = show i
-showValue (PCounter (Just 0) (Just ((PPIntelCounter name _ _),  v))) =
+showValue (PCounter (Expanded 0) (Just ((PPIntelCounter name _ _),  v))) =
   name ++ ": " ++ show v
-showValue (PCounter (Just 1) (Just ((PPIntelCounter _ name _),  v))) =
+showValue (PCounter (Expanded 1) (Just ((PPIntelCounter _ name _),  v))) =
   name ++ ": " ++ show v
-showValue (PCounter (Just 2) (Just ((PPIntelCounter _ _ name),  v))) =
+showValue (PCounter (Expanded 2) (Just ((PPIntelCounter _ _ name),  v))) =
   name ++ ": " ++ show v
-showValue (PCounter Nothing _) = "0" -- (Just (PPCNone, _))) = "0"
 
 -- |Currently does no processing. Opens 'filename' and writes out CSVs
 -- - one per found frame type - to 'destDir'.

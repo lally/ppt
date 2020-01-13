@@ -118,6 +118,7 @@ instance Hashable Frame where
 
 instance ToJSON PIPrecision
 instance ToJSON PFPPrecision
+instance ToJSON ExpansionInfo
 instance ToJSON PCounterConfig
 instance ToJSON Prim
 instance ToJSON ELanguage
@@ -138,6 +139,7 @@ instance ToJSON Buffer
 
 instance FromJSON PIPrecision
 instance FromJSON PFPPrecision
+instance FromJSON ExpansionInfo
 instance FromJSON PCounterConfig
 instance FromJSON Prim
 instance FromJSON ELanguage

@@ -150,11 +150,11 @@ layoutMember :: TargetInfo -> FrameMember -> [LayoutMember]
 layoutMember tinfo fr@(FMember ty nm True) =
   case ty of
     (PCounter n _) ->
-      if n /= Nothing
+      if n /= NotExpanded
       then fail "Got allocated PCounter during layout of interval."
       else -- replicate this.
         let numCounters = tCounterCount tinfo
-        in concatMap (\i -> makePair (PCounter (Just i) Nothing) i (numCounters -1)) [0..(numCounters - 1)]
+        in concatMap (\i -> makePair (PCounter (Expanded i) Nothing) i (numCounters -1)) [0..(numCounters - 1)]
     _ -> makePair ty 0 1
   where sz = sizeOf tinfo ty
         algn = alignOf tinfo ty
@@ -166,10 +166,10 @@ layoutMember tinfo fr@(FMember ty nm True) =
 layoutMember tinfo fr@(FMember ty nm False) =
   case ty of
     (PCounter n _) ->
-      if n /= Nothing
+      if n /= NotExpanded
       then fail "Got allocated PCounter during layout"
       else
-        map (\pc -> LMember pc 0 algn sz (LKMember fr Nothing) nm) [ (PCounter (Just i) Nothing) | i <- [0..(tCounterCount tinfo - 1)] ]
+        map (\pc -> LMember pc 0 algn sz (LKMember fr Nothing) nm) [ (PCounter (Expanded i) Nothing) | i <- [0..(tCounterCount tinfo - 1)] ]
     _  -> [LMember ty 0 algn sz (LKMember fr Nothing) nm]
   where sz = sizeOf tinfo ty
         algn = alignOf tinfo ty
