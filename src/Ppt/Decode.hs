@@ -175,8 +175,19 @@ decodeFromBuffer rinfo vec startOffset sz layouts =
 configureLayouts :: FileRecord -> [FrameLayout]
 configureLayouts frecord =
   let json = frJson frecord
-      convertMember :: GenLayoutMember a -> GenLayoutMember a
-      convertMember = id
+      counterConfig = case frCounters frecord of
+        [] -> Just (PPCNone, 0)
+        xs -> Just (PPIntelCounter (x !! 0) (x !! 1) (x !! 2), 0)
+              where x = xs ++ repeat ""
+      timeConfig = Just ((jsBufferEmit (frJson frecord)) ^. eTimeRep, 0, 0)
+      convertMember :: LayoutMember -> LayoutMember
+      convertMember mem =
+        case mem ^. lKind of
+          LKMember fm@(FMember (PTime t) _ _) side ->
+            mem { _lKind = LKMember (fm { fmType = PTime timeConfig }) side }
+          LKMember fm@(FMember (PCounter e v) _ _) side ->
+            mem { _lKind = LKMember (fm { fmType = PCounter e counterConfig }) side }
+          _ -> mem
       convertLayout :: FrameLayout -> FrameLayout
       convertLayout layout =
         layout { _flLayout = map convertMember (layout ^. flLayout) }

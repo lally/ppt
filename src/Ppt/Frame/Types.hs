@@ -36,12 +36,14 @@ data GenLayoutKind d = LKSeqno SeqNoSide
 makePrisms ''GenLayoutKind
 
 data GenLayoutMember d = LMember { _lType :: Prim
+                                 -- ^The type as declared.
                                  , _lOffset :: Int
                                  , _lAlignment :: Int
                                    -- ^Typically the same as lSize, unless it's padding
                                  , _lSize :: Int
                                    -- ^Purely a function of TargetInfo and lType
                                  , _lKind :: GenLayoutKind d
+                                   -- ^Representation.
                                  , _lName :: String }
                         deriving (Generic, Eq, Show)
 
