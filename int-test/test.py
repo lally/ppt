@@ -53,13 +53,13 @@ def runCppExperiment(extraFlags=[]):
         print("  sleeping 1 sec")
         sleep(1)
         attach_args = ["stack", "exec", "ppt", "--", "attach", "-p", str(instrumented.pid),
-                     "-b", "Minimal", "-v", "-o", tmpfile.name] + extraFlags
+                     "-b", "Minimal", "-o", tmpfile.name] + extraFlags
         print(f"Attaching via ppt with filename {tmpfile.name}: " + ' '.join(attach_args))
         ppt = Popen(attach_args)
         print(f"  pid is {ppt.pid}, sleeping 5 sec")
         sleep(5)
         print( "  killing ppt")
-        ppt.terminate()
+        ppt.kill()
         print( "  killing cpptest")
         instrumented.kill()
         # Note: this probably requires a flag to stack to indicate where
@@ -75,5 +75,5 @@ def runCppExperiment(extraFlags=[]):
 if __name__ == '__main__':
   buildCpp()
   runCppExperiment(["-c", "LLC_MISSES,INSTRUCTIONS_RETIRED,UNHALTED_CORE_CYCLES"])
-  runCppExperiment()
+#  runCppExperiment()
 

@@ -99,7 +99,7 @@ readMember (lmem:lmems) rconf layout v@(vec, rinfo, startOffset) =
           mrequire True a = MaybeT $ return $ Just a
           mrequire False msg = MaybeT $ do putStrLn $ show msg
                                            return Nothing
-      primValue <- MaybeT $ liftM Just $ readValue (fmType elem) rconf vec (lIxOf lmem)
+      primValue <- MaybeT $ liftM Just $ readValue (lmem ^. lType) rconf vec (lIxOf lmem)
       let thisResult = FEValue <$> (pure primValue) <*> (findMember (frMemName lmem) layout) <*> pure lmem
       rest <- readMember lmems rconf layout v
       --MaybeT $ do putStrLn $ "Got member: " ++ show primValue ++ " for found member " ++ (
@@ -323,12 +323,7 @@ showValue (PTime (Just (ETimeVal, a, b))) = show $ a * 1000000 + b
 -- these two should probably truncate
 showValue (PRational _ (Just d)) = show d
 showValue (PIntegral _ (Just i)) = show i
-showValue (PCounter (Expanded 0) (Just ((PPIntelCounter name _ _),  v))) =
-  name ++ ": " ++ show v
-showValue (PCounter (Expanded 1) (Just ((PPIntelCounter _ name _),  v))) =
-  name ++ ": " ++ show v
-showValue (PCounter (Expanded 2) (Just ((PPIntelCounter _ _ name),  v))) =
-  name ++ ": " ++ show v
+showValue (PCounter (Expanded _) (Just (_,  v))) = show v
 
 -- |Currently does no processing. Opens 'filename' and writes out CSVs
 -- - one per found frame type - to 'destDir'.
@@ -336,7 +331,12 @@ decodeFileToCSVs filename destDir = do
   let writeCsv dir (DFrame fr lmem rows) = do
         let fileName = _frameName fr ++ ".csv"
             firstRow = head rows
-            nameOf lm = lm ^. lName
+            nameOf lm =
+              case memLayoutType lm  of
+                Just (PCounter (Expanded 0) (Just (PPIntelCounter a _ _, v))) -> (lm ^. lName) ++ ": " ++ a
+                Just (PCounter (Expanded 1) (Just (PPIntelCounter _ b _, v))) -> (lm ^. lName) ++ ": " ++ b
+                Just (PCounter (Expanded 2) (Just (PPIntelCounter _ _ c, v))) -> (lm ^. lName) ++ ": " ++ c
+                _ -> lm ^. lName
             headers = "ppt_seqno, " ++  L.intercalate ", " (map nameOf $ lmem ^.. folded)
             saveRow (DRow _ n vs) = L.intercalate ", " $ show n:map showValue vs
         h <- openFile (destDir ++ "/" ++ fileName) WriteMode

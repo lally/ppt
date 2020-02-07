@@ -3,7 +3,7 @@
 
 module Ppt.Frame.Types ( module Ppt.Frame.Types,
                          module Ppt.Frame.Prim) where
-import Control.Lens (makePrisms, makeLenses, view)
+import Control.Lens (makePrisms, makeLenses, view, (^.))
 import GHC.Generics
 import Ppt.Frame.Prim
 
@@ -49,6 +49,10 @@ data GenLayoutMember d = LMember { _lType :: Prim
 
 makeLenses ''GenLayoutMember
 
+memLayoutType :: GenLayoutMember d -> Maybe d
+memLayoutType lm = case (lm ^. lKind) of
+                     LKMember d _ -> Just d
+                     _ -> Nothing
 
 data LayoutIOSpec = LayoutIO { _lioSize :: Int
                              , _lioBackOffset :: Int

@@ -100,7 +100,7 @@ int main(int args, char ** argv) {
        record.snapshot_foos_end();
        record.save();
      }
-     if (false) // 0 == (loopCounter % 1000))
+     if (0 == (loopCounter % 1000))
        printf("Firsts: %8d, Seconds: %8d, Iters: %d\n", firstCount, secondCount, loopCounter);
      usleep(delay);
    }
