@@ -53,7 +53,7 @@ def runCppExperiment(extraFlags=[]):
         print("  sleeping 1 sec")
         sleep(1)
         attach_args = ["stack", "exec", "ppt", "--", "attach", "-p", str(instrumented.pid),
-                     "-b", "Minimal", "-o", tmpfile.name] + extraFlags
+                       "-b", "Minimal", "-o", tmpfile.name] + extraFlags
         print(f"Attaching via ppt with filename {tmpfile.name}: " + ' '.join(attach_args))
         ppt = Popen(attach_args)
         print(f"  pid is {ppt.pid}, sleeping 5 sec")
@@ -67,7 +67,8 @@ def runCppExperiment(extraFlags=[]):
         decode_args = ["stack", "exec", "--cwd", tmpdir.dir, "ppt", "decode", tmpfile.name]
         if True:
            print( "Decoding via " + ' '.join(decode_args))
-           call(decode_args)
+           with open(os.path.join(tmpdir.dir, "decode.log"), "w") as output:
+             call(decode_args, stdout=output)
         else:
             print(" Skipping decode.")
         tmpdir.passing = False

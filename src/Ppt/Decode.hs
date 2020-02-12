@@ -164,9 +164,9 @@ decodeFromBuffer rinfo vec startOffset sz layouts =
                MaybeT $ return $ Just (fromIntegral rawFrameType :: Int)
        else MaybeT $ return $ Just 0
 
-     mrequire (frameType < nrFrameTypes) ("Frame type discriminator in range (frame type, nr values)", frameType, nrFrameTypes)
+     mrequire (frameType /= 0 && frameType <= nrFrameTypes) ("Frame type discriminator in range (frame type, nr values)", frameType, nrFrameTypes)
 
-     let layout = layouts !! frameType
+     let layout = layouts !! (frameType - 1)
      members <- readMember (layout ^. flLayout) rinfo layout (vec, rinfo, startOffset)
      return (FValue (layout ^. flFrame) members)
 
@@ -325,19 +325,25 @@ showValue (PRational _ (Just d)) = show d
 showValue (PIntegral _ (Just i)) = show i
 showValue (PCounter (Expanded _) (Just (_,  v))) = show v
 
+memLayoutType :: GenLayoutMember FrameMember -> Maybe Prim
+memLayoutType lm = case (lm ^. lKind) of
+                     LKMember d _ -> Just (fmType d)
+                     _ -> Nothing
+
 -- |Currently does no processing. Opens 'filename' and writes out CSVs
 -- - one per found frame type - to 'destDir'.
 decodeFileToCSVs filename destDir = do
   let writeCsv dir (DFrame fr lmem rows) = do
         let fileName = _frameName fr ++ ".csv"
             firstRow = head rows
+            nameOf :: LayoutMember -> String
             nameOf lm =
-              case memLayoutType lm  of
+              case memLayoutType lm of
                 Just (PCounter (Expanded 0) (Just (PPIntelCounter a _ _, v))) -> (lm ^. lName) ++ ": " ++ a
                 Just (PCounter (Expanded 1) (Just (PPIntelCounter _ b _, v))) -> (lm ^. lName) ++ ": " ++ b
                 Just (PCounter (Expanded 2) (Just (PPIntelCounter _ _ c, v))) -> (lm ^. lName) ++ ": " ++ c
                 _ -> lm ^. lName
-            headers = "ppt_seqno, " ++  L.intercalate ", " (map nameOf $ lmem ^.. folded)
+            headers = "ppt_seqno, " ++  (L.intercalate ", " (map nameOf lmem))
             saveRow (DRow _ n vs) = L.intercalate ", " $ show n:map showValue vs
         h <- openFile (destDir ++ "/" ++ fileName) WriteMode
         hPutStrLn h headers

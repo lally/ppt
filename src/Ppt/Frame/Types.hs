@@ -49,10 +49,6 @@ data GenLayoutMember d = LMember { _lType :: Prim
 
 makeLenses ''GenLayoutMember
 
-memLayoutType :: GenLayoutMember d -> Maybe d
-memLayoutType lm = case (lm ^. lKind) of
-                     LKMember d _ -> Just d
-                     _ -> Nothing
 
 data LayoutIOSpec = LayoutIO { _lioSize :: Int
                              , _lioBackOffset :: Int
