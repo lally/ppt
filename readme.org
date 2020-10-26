@@ -25,15 +25,20 @@ When =ppt= isn't attached to a running process, there is no buffer and saving a
 frame is a no-op.
 
 * How do I build it?
-  You need =stack=, the haskell build tool.  [[Download Instructions Are Here][https://docs.haskellstack.org/en/stable/README/]].
-  The configuration is setup to use =nix=.  It's convenient, but not absolutely required.  You just need two libraries:
+  You need =stack=, the haskell build tool.  [[Download Instructions Are Here][https://docs.haskellstack.org/en/stable/README/]].  Only tested on Linux.  I'm quite sure it won't work on MacOS X without serious changes (e.g., the ELF dependency).
+  
+** With Nix
+  With =nix=, it's just =stack install=.  The build output will indicate the directory (=~/.local/bin=) where the binaries are installed.  
+  
+** Without Nix
+  =nix= installs some dependencies, but not many.  You just need to install two libraries:
   
   | Library | Ubuntu Names        |
   |---------+---------------------|
   | zlib    | zlib1g, zlib1g-dev  |
   | libpfm4 | libpfm4 libpfm4-dev |
   
-  With =nix=, it's just =stack install=, without =nix=, install the packages above (or equivalents for your distro) and =stack install --no-nix=.  The build output will indicate the directory (=~/.local/bin=) where the binaries are installed.  You can ignore =elf=, only =ppt= matters.
+  Once installed just run =stack install --no-nix=.  The build output will indicate the directory (=~/.local/bin=) where the binaries are installed.  You can ignore =elf=, only =ppt= matters.
   
   
 * Why another performance tool?
