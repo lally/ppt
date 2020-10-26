@@ -67,8 +67,6 @@ library
   default-extensions:  UnicodeSyntax
                      , OverloadedStrings
   default-language:    Haskell2010
-  c-sources:           src/Ppt/ElfProcess.c
-                     , src/Ppt/Agent/ElfProtocol.c
 
 executable ppt
   hs-source-dirs:      tools
