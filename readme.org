@@ -24,6 +24,18 @@ support for using timers and CPU performance counters.
 When =ppt= isn't attached to a running process, there is no buffer and saving a
 frame is a no-op.
 
+* How do I build it?
+  You need =stack=, the haskell build tool.  [[Download Instructions Are Here][https://docs.haskellstack.org/en/stable/README/]].
+  The configuration is setup to use =nix=.  It's convenient, but not absolutely required.  You just need two libraries:
+  
+  | Library | Ubuntu Names        |
+  |---------+---------------------|
+  | zlib    | zlib1g, zlib1g-dev  |
+  | libpfm4 | libpfm4 libpfm4-dev |
+  
+  With =nix=, it's just =stack build=, without =nix=, install the packages above (or equivalents for your distro) and =stack build --no-nix=.
+  
+  
 * Why another performance tool?
 ** Why not dtrace or gprof?
    Because they solve different problems.  In a dreaded car analogy, =gprof= is
