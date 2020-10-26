@@ -33,7 +33,7 @@ frame is a no-op.
   | zlib    | zlib1g, zlib1g-dev  |
   | libpfm4 | libpfm4 libpfm4-dev |
   
-  With =nix=, it's just =stack build=, without =nix=, install the packages above (or equivalents for your distro) and =stack build --no-nix=.
+  With =nix=, it's just =stack install=, without =nix=, install the packages above (or equivalents for your distro) and =stack install --no-nix=.  The build output will indicate the directory (=~/.local/bin=) where the binaries are installed.  You can ignore =elf=, only =ppt= matters.
   
   
 * Why another performance tool?
